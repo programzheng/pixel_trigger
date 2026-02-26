@@ -1,0 +1,15 @@
+[project]
+name = "pixel-trigger"
+version = "0.2.0"
+description = "通用圖像觸發自動化工具"
+requires-python = ">=3.12"
+dependencies = [
+    "opencv-python>=4.8.0",
+    "pyautogui>=0.9.54",
+    "keyboard>=0.13.5",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+]
+
+[project.scripts]
+pixel-trigger = "main:main"

@@ -1,0 +1,7 @@
+.vscode/
+templates/
+profiles/
+
+.venv/
+__pycache__/
+.claude/
