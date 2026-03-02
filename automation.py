@@ -85,7 +85,10 @@ class HookEngine:
             if not profile:
                 break
 
-            enabled_combos = [c for c in profile.combos if c.enabled and c.image_path]
+            enabled_combos = [
+                c for c in profile.combos
+                if c.enabled and (c.image_path or c.verify_text)
+            ]
 
             # 截圖一次，所有 combo 共用
             frame = self._capture.grab_frame(profile.scan_region)
@@ -112,9 +115,54 @@ class HookEngine:
         self, combo: Combo, frame, region: tuple[int, int, int, int] | None
     ):
         """處理單一 Combo 的偵測與觸發"""
-        found, confidence, pos = self._capture.match_template(
-            frame, combo.image_path, combo.match_threshold, region
-        )
+        text_conf = 0.0
+        confidence = 0.0
+
+        if not combo.image_path and combo.verify_text:
+            # ── 純 OCR 模式：無觸發圖片，直接對整個 frame 做 OCR ──
+            found = False
+            text_ok, text_conf = self._capture.ocr_verify(
+                frame, combo.verify_text, combo.text_threshold,
+                match_mode=combo.text_match_mode.value,
+                match_ratio=combo.text_match_ratio,
+            )
+            if text_ok:
+                found = True
+                confidence = text_conf
+                print(
+                    f"[{datetime.now():%Y%m%d %H:%M:%S}][ocr] '{combo.name}' "
+                    f"文字偵測到! text_conf={text_conf:.3f}"
+                )
+        else:
+            # ── 圖片比對模式 ──
+            found, confidence, pos = self._capture.match_template(
+                frame, combo.image_path, combo.match_threshold, region
+            )
+
+            # 文字驗證（圖片匹配成功 + 有設定 verify_text 時才執行 OCR）
+            if found and combo.verify_text and pos:
+                size = self._capture.get_template_size(combo.image_path)
+                if size:
+                    tw, th = size
+                    # pos 是螢幕絕對座標中心，轉回 frame 相對座標
+                    fx = pos[0] - tw // 2
+                    fy = pos[1] - th // 2
+                    if region:
+                        fx -= region[0]
+                        fy -= region[1]
+                    roi = frame[max(0, fy):fy + th, max(0, fx):fx + tw]
+                    text_ok, text_conf = self._capture.ocr_verify(
+                        roi, combo.verify_text, combo.text_threshold,
+                        match_mode=combo.text_match_mode.value,
+                        match_ratio=combo.text_match_ratio,
+                    )
+                    if not text_ok:
+                        found = False
+                        print(
+                            f"[{datetime.now():%Y%m%d %H:%M:%S}][ocr] '{combo.name}' "
+                            f"圖片匹配但文字不符 text_conf={text_conf:.3f}"
+                        )
+
         was_visible = self._prev_visible.get(combo.id, False)
         self._prev_visible[combo.id] = found
 
@@ -124,7 +172,8 @@ class HookEngine:
 
         # Debug log
         if found and not was_visible:
-            print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 偵測到! confidence={confidence:.3f}")
+            extra = f" text_conf={text_conf:.3f}" if combo.verify_text else ""
+            print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 偵測到! confidence={confidence:.3f}{extra}")
         elif not found and was_visible:
             print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 消失了 confidence={confidence:.3f}")
 
