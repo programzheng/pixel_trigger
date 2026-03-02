@@ -13,6 +13,13 @@ class TriggerMode(str, Enum):
     WHILE_VISIBLE = "while_visible"    # 圖片可見期間持續執行，消失即停止
 
 
+# ── 文字匹配模式 ────────────────────────────────────────────
+class TextMatchMode(str, Enum):
+    CONTAINS = "contains"        # 包含（子字串）
+    EXACT = "exact"              # 完全符合
+    PARTIAL = "partial"          # 部分符合（字元相似度）
+
+
 # ── 動作類型 ──────────────────────────────────────────────
 class ActionType(str, Enum):
     # 滑鼠
@@ -89,7 +96,13 @@ class Combo:
 
     # 圖片偵測
     image_path: str = ""           # 模板圖片路徑
-    match_threshold: float = 0.8   # 比對閾值
+    match_threshold: float = 0.8   # 圖片比對閾值
+
+    # 文字驗證（可選，留空則不做 OCR）
+    verify_text: str = ""          # 期望在圖片區域內出現的文字
+    text_threshold: float = 0.5    # 文字辨識信心度閾值
+    text_match_mode: TextMatchMode = TextMatchMode.CONTAINS  # 文字匹配模式
+    text_match_ratio: float = 0.6  # 部分符合時的最低吻合比例
 
     # 觸發模式
     trigger: TriggerMode = TriggerMode.ON_APPEAR
@@ -98,7 +111,7 @@ class Combo:
     action: Action = field(default_factory=Action)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "id": self.id,
             "name": self.name,
             "enabled": self.enabled,
@@ -107,6 +120,13 @@ class Combo:
             "trigger": self.trigger.value,
             "action": self.action.to_dict(),
         }
+        # 只在有設定時才寫入，保持 JSON 簡潔
+        if self.verify_text:
+            d["verify_text"] = self.verify_text
+            d["text_threshold"] = self.text_threshold
+            d["text_match_mode"] = self.text_match_mode.value
+            d["text_match_ratio"] = self.text_match_ratio
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> Combo:
@@ -116,6 +136,10 @@ class Combo:
             enabled=d.get("enabled", True),
             image_path=d.get("image_path", ""),
             match_threshold=d.get("match_threshold", 0.8),
+            verify_text=d.get("verify_text", ""),
+            text_threshold=d.get("text_threshold", 0.5),
+            text_match_mode=TextMatchMode(d.get("text_match_mode", "contains")),
+            text_match_ratio=d.get("text_match_ratio", 0.6),
             trigger=TriggerMode(d.get("trigger", "on_appear")),
             action=Action.from_dict(d.get("action", {})),
         )

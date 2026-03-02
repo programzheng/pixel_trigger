@@ -5,20 +5,26 @@ from __future__ import annotations
 import os
 import collections
 import time
+import warnings
 import tkinter as tk
+
+warnings.filterwarnings("ignore", message=".*pin_memory.*")
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from pathlib import Path
 
-from PIL import ImageGrab
+import numpy as np
+from PIL import Image, ImageGrab, ImageTk
 
 import profile_manager
 from automation import HookEngine
+from screen_capture import ocr_read_image
 from models import (
     Action,
     ActionType,
     Combo,
     MouseButton,
     Profile,
+    TextMatchMode,
     TriggerMode,
 )
 
@@ -138,6 +144,9 @@ class App:
             var = tk.StringVar()
             tk.Entry(grid, textvariable=var, width=7).grid(row=0, column=i * 2 + 1, padx=2)
             self.region_vars.append(var)
+        tk.Button(
+            grid, text="框選", command=self._select_region,
+        ).grid(row=0, column=8, padx=(8, 0))
 
         # --- 狀態列 ---
         frm_status = tk.Frame(self.root, padx=10, pady=5)
@@ -251,6 +260,23 @@ class App:
         else:
             for var in self.region_vars:
                 var.set("")
+
+    def _select_region(self):
+        """隱藏主視窗 → 全螢幕框選 → 填入座標"""
+        self.root.withdraw()
+        self.root.update_idletasks()
+        # 短暫 delay 讓主視窗完全消失
+        self.root.after(200, self._open_region_selector)
+
+    def _open_region_selector(self):
+        sel = RegionSelector(self.root)
+        self.root.deiconify()
+        if sel.result:
+            x, y, w, h = sel.result
+            self.region_vars[0].set(str(x))
+            self.region_vars[1].set(str(y))
+            self.region_vars[2].set(str(w))
+            self.region_vars[3].set(str(h))
 
     def _sync_region_from_ui(self):
         values = []
@@ -444,8 +470,8 @@ class ComboEditor:
 
         self.win = tk.Toplevel(parent)
         self.win.title("編輯 Combo")
-        self.win.geometry("420x500")
-        self.win.resizable(False, False)
+        self.win.geometry("420x720")
+        self.win.resizable(False, True)
         self.win.grab_set()
         self.win.attributes("-topmost", True)
 
@@ -465,9 +491,23 @@ class ComboEditor:
         tk.Button(frm_img, text="瀏覽", command=self._browse_image).pack(side="left", padx=2)
         tk.Button(frm_img, text="貼上", command=self._paste_image).pack(side="left", padx=2)
 
-        # 圖片預覽
-        self.lbl_preview = tk.Label(self.win, text="", fg="#888888")
-        self.lbl_preview.pack(anchor="w", padx=10)
+        # 圖片預覽（文字 + 去背按鈕 + 縮圖）
+        frm_preview = tk.Frame(self.win)
+        frm_preview.pack(fill="x", padx=10)
+        self.lbl_preview = tk.Label(frm_preview, text="", fg="#888888")
+        self.lbl_preview.pack(side="left")
+        self.btn_rmbg = tk.Button(
+            frm_preview, text="去背", command=self._remove_bg,
+        )
+
+        self._preview_photo = None  # 防止 GC 回收 PhotoImage
+        self.lbl_thumb = tk.Label(self.win, relief="groove")
+        self.lbl_thumb.pack(anchor="w", padx=10, pady=2)
+        self.lbl_thumb.pack_forget()  # 初始隱藏，有圖才顯示
+
+        # 若已有圖片，顯示預覽
+        if combo.image_path:
+            self._update_preview(combo.image_path)
 
         # Ctrl+V 快捷鍵
         self.win.bind("<Control-v>", lambda e: self._paste_image())
@@ -475,10 +515,47 @@ class ComboEditor:
         # 比對閾值
         frm_thresh = tk.Frame(self.win)
         frm_thresh.pack(fill="x", **pad)
-        tk.Label(frm_thresh, text="比對閾值:").pack(side="left")
+        tk.Label(frm_thresh, text="圖片閾值:").pack(side="left")
         self.var_threshold = tk.StringVar(value=str(combo.match_threshold))
         tk.Entry(frm_thresh, textvariable=self.var_threshold, width=8).pack(side="left", padx=5)
         tk.Label(frm_thresh, text="(0.0~1.0, 越高越嚴格)").pack(side="left")
+
+        # 文字驗證（可選）— 分兩行避免溢出
+        frm_vtext1 = tk.Frame(self.win)
+        frm_vtext1.pack(fill="x", **pad)
+        tk.Label(frm_vtext1, text="驗證文字:").pack(side="left")
+        self.var_verify_text = tk.StringVar(value=combo.verify_text)
+        tk.Entry(frm_vtext1, textvariable=self.var_verify_text, width=20).pack(side="left", padx=5)
+        tk.Label(frm_vtext1, text="(留空=不驗證)").pack(side="left")
+
+        frm_vtext2 = tk.Frame(self.win)
+        frm_vtext2.pack(fill="x", **pad)
+        tk.Label(frm_vtext2, text="文字閾值:").pack(side="left")
+        self.var_text_threshold = tk.StringVar(value=str(combo.text_threshold))
+        tk.Entry(frm_vtext2, textvariable=self.var_text_threshold, width=8).pack(side="left", padx=5)
+        tk.Label(frm_vtext2, text="(0.0~1.0, OCR 信心度)").pack(side="left")
+
+        # 匹配模式 + 吻合比例
+        frm_vtext3 = tk.Frame(self.win)
+        frm_vtext3.pack(fill="x", **pad)
+        tk.Label(frm_vtext3, text="匹配模式:").pack(side="left")
+        self.var_text_match_mode = tk.StringVar(value=combo.text_match_mode.value)
+        match_labels = {"contains": "包含", "exact": "完全符合", "partial": "部分符合"}
+        om = ttk.OptionMenu(
+            frm_vtext3, self.var_text_match_mode,
+            combo.text_match_mode.value,
+            *[m.value for m in TextMatchMode],
+            command=lambda _: self._on_match_mode_change(),
+        )
+        om.pack(side="left", padx=5)
+        # 吻合比例（僅部分符合時顯示）
+        self.lbl_match_ratio = tk.Label(frm_vtext3, text="吻合比例:")
+        self.var_text_match_ratio = tk.StringVar(value=str(combo.text_match_ratio))
+        self.ent_match_ratio = tk.Entry(
+            frm_vtext3, textvariable=self.var_text_match_ratio, width=5,
+        )
+        self.lbl_match_ratio_hint = tk.Label(frm_vtext3, text="(0.0~1.0)")
+        self._on_match_mode_change()  # 初始顯示/隱藏
 
         # 觸發模式
         tk.Label(self.win, text="觸發模式:").pack(anchor="w", **pad)
@@ -560,6 +637,38 @@ class ComboEditor:
 
         self.win.wait_window()
 
+    def _update_preview(self, path: str, auto_ocr: bool = False):
+        """載入圖片並顯示縮圖預覽。auto_ocr=True 時自動 OCR 帶入驗證文字。"""
+        try:
+            img = Image.open(path)
+        except Exception:
+            self.lbl_thumb.pack_forget()
+            self.btn_rmbg.pack_forget()
+            return
+        w, h = img.size
+        self.lbl_preview.config(
+            text=f"{Path(path).name} ({w}x{h})", fg="#333333",
+        )
+        self.btn_rmbg.pack(side="left", padx=5)
+        # 縮放到最大 120px 高
+        max_h = 120
+        if h > max_h:
+            ratio = max_h / h
+            img = img.resize((int(w * ratio), max_h), Image.LANCZOS)
+        self._preview_photo = ImageTk.PhotoImage(img)
+        self.lbl_thumb.config(image=self._preview_photo)
+        self.lbl_thumb.pack(anchor="w", padx=10, pady=2)
+
+        # 更換圖片時自動 OCR 讀取文字帶入
+        if auto_ocr and hasattr(self, "var_verify_text"):
+            self.lbl_preview.config(text=f"{Path(path).name} ({w}x{h}) OCR 讀取中...")
+            self.win.update_idletasks()
+            text = ocr_read_image(path)
+            self.var_verify_text.set(text)
+            self.lbl_preview.config(
+                text=f"{Path(path).name} ({w}x{h})", fg="#333333",
+            )
+
     def _browse_image(self):
         path = filedialog.askopenfilename(
             title="選擇觸發圖片",
@@ -568,7 +677,7 @@ class ComboEditor:
         )
         if path:
             self.var_image.set(path)
-            self.lbl_preview.config(text="")
+            self._update_preview(path, auto_ocr=True)
 
     def _paste_image(self):
         """從剪貼簿貼上圖片，自動存到 templates/ 目錄"""
@@ -595,8 +704,28 @@ class ComboEditor:
             return
 
         self.var_image.set(str(save_path))
-        w, h = img.size
-        self.lbl_preview.config(text=f"已貼上: {filename} ({w}x{h})", fg="green")
+        self._update_preview(str(save_path), auto_ocr=True)
+
+    def _remove_bg(self):
+        """開啟色彩去背對話框"""
+        image_path = self.var_image.get().strip()
+        if not image_path:
+            return
+        dlg = RemoveBgDialog(self.win, image_path)
+        if dlg.result_path:
+            self.var_image.set(dlg.result_path)
+            self._update_preview(dlg.result_path, auto_ocr=True)
+
+    def _on_match_mode_change(self):
+        """部分符合時才顯示吻合比例欄位"""
+        if self.var_text_match_mode.get() == "partial":
+            self.lbl_match_ratio.pack(side="left", padx=(10, 0))
+            self.ent_match_ratio.pack(side="left", padx=2)
+            self.lbl_match_ratio_hint.pack(side="left")
+        else:
+            self.lbl_match_ratio.pack_forget()
+            self.ent_match_ratio.pack_forget()
+            self.lbl_match_ratio_hint.pack_forget()
 
     def _on_action_type_change(self):
         """根據動作類型 + 觸發模式，顯示/隱藏相關參數"""
@@ -634,22 +763,282 @@ class ComboEditor:
 
     def _ok(self):
         try:
-            self.combo.name = self.var_name.get().strip() or "新組合"
-            self.combo.image_path = self.var_image.get().strip()
-            self.combo.match_threshold = self._to_float(self.var_threshold.get(), 0.8)
-            self.combo.trigger = TriggerMode(self.var_trigger.get())
+            # ── 先解析所有值（可能 raise ValueError）──
+            name = self.var_name.get().strip() or "新組合"
+            image_path = self.var_image.get().strip()
+            match_threshold = self._to_float(self.var_threshold.get(), 0.8)
+            verify_text = self.var_verify_text.get().strip()
+            text_threshold = self._to_float(self.var_text_threshold.get(), 0.5)
+            text_match_mode = TextMatchMode(self.var_text_match_mode.get())
+            text_match_ratio = (
+                self._to_float(self.var_text_match_ratio.get(), 0.6)
+                if text_match_mode == TextMatchMode.PARTIAL
+                else self.combo.text_match_ratio
+            )
+            trigger = TriggerMode(self.var_trigger.get())
+
+            at = self.var_action_type.get()
+            action_type = ActionType(at)
+            is_mouse = at in ("click", "rapid_click", "hold_mouse")
+            is_rapid = at in ("rapid_click", "rapid_key")
+            is_hold = at in ("hold_mouse", "hold_key")
+            is_while_visible = self.var_trigger.get() == "while_visible"
+            need_duration = is_rapid or (is_hold and not is_while_visible)
+
+            mouse_button = MouseButton(self.var_mouse_btn.get())
+            key = self.var_key.get().strip()
+            delay_min = self._to_float(self.var_delay_min.get())
+            delay_max = self._to_float(self.var_delay_max.get())
+
+            # 只在欄位可見時才解析，否則保留原值
+            duration = (self._to_float(self.var_duration.get(), 1.0)
+                        if need_duration else self.combo.action.duration)
+            interval_min = (self._to_float(self.var_interval_min.get(), 0.05)
+                            if is_rapid else self.combo.action.interval_min)
+            interval_max = (self._to_float(self.var_interval_max.get(), 0.15)
+                            if is_rapid else self.combo.action.interval_max)
+
+            # ── 全部合法才寫入（避免 partial update）──
+            self.combo.name = name
+            self.combo.image_path = image_path
+            self.combo.match_threshold = match_threshold
+            self.combo.verify_text = verify_text
+            self.combo.text_threshold = text_threshold
+            self.combo.text_match_mode = text_match_mode
+            self.combo.text_match_ratio = text_match_ratio
+            self.combo.trigger = trigger
 
             action = self.combo.action
-            action.action_type = ActionType(self.var_action_type.get())
-            action.mouse_button = MouseButton(self.var_mouse_btn.get())
-            action.key = self.var_key.get().strip()
-            action.delay_min = self._to_float(self.var_delay_min.get())
-            action.delay_max = self._to_float(self.var_delay_max.get())
-            action.duration = self._to_float(self.var_duration.get(), 1.0)
-            action.interval_min = self._to_float(self.var_interval_min.get(), 0.05)
-            action.interval_max = self._to_float(self.var_interval_max.get(), 0.15)
+            action.action_type = action_type
+            action.mouse_button = mouse_button
+            action.key = key
+            action.delay_min = delay_min
+            action.delay_max = delay_max
+            action.duration = duration
+            action.interval_min = interval_min
+            action.interval_max = interval_max
 
             self.result = True
             self.win.destroy()
         except ValueError as e:
             messagebox.showerror("錯誤", f"參數格式不正確:\n{e}")
+
+
+# ══════════════════════════════════════════════════════════
+#  螢幕區域框選
+# ══════════════════════════════════════════════════════════
+
+class RegionSelector:
+    """全螢幕半透明覆蓋層，用滑鼠拖拉框選區域，回傳 (x, y, w, h) 或 None"""
+
+    def __init__(self, parent):
+        self.result: tuple[int, int, int, int] | None = None
+        self._start_x = 0
+        self._start_y = 0
+        self._rect_id = None
+
+        self.overlay = tk.Toplevel(parent)
+        self.overlay.attributes("-fullscreen", True)
+        self.overlay.attributes("-alpha", 0.3)
+        self.overlay.attributes("-topmost", True)
+        self.overlay.configure(bg="black")
+
+        self.canvas = tk.Canvas(
+            self.overlay, cursor="cross", highlightthickness=0,
+            bg="black",
+        )
+        self.canvas.pack(fill="both", expand=True)
+
+        self.canvas.bind("<ButtonPress-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.overlay.bind("<Escape>", lambda e: self._cancel())
+
+        # 提示文字
+        sw = self.overlay.winfo_screenwidth()
+        self.canvas.create_text(
+            sw // 2, 30, text="拖拉框選偵測區域，ESC 取消",
+            fill="white", font=("Microsoft JhengHei", 16),
+        )
+
+        self.overlay.grab_set()
+        self.overlay.wait_window()
+
+    def _on_press(self, event):
+        self._start_x = event.x
+        self._start_y = event.y
+        if self._rect_id:
+            self.canvas.delete(self._rect_id)
+        self._rect_id = self.canvas.create_rectangle(
+            event.x, event.y, event.x, event.y,
+            outline="red", width=2,
+        )
+
+    def _on_drag(self, event):
+        if self._rect_id:
+            self.canvas.coords(
+                self._rect_id,
+                self._start_x, self._start_y, event.x, event.y,
+            )
+
+    def _on_release(self, event):
+        x1 = min(self._start_x, event.x)
+        y1 = min(self._start_y, event.y)
+        x2 = max(self._start_x, event.x)
+        y2 = max(self._start_y, event.y)
+        w = x2 - x1
+        h = y2 - y1
+        if w > 5 and h > 5:  # 太小視為誤觸
+            self.result = (x1, y1, w, h)
+        self.overlay.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.overlay.destroy()
+
+
+# ══════════════════════════════════════════════════════════
+#  色彩去背對話框
+# ══════════════════════════════════════════════════════════
+
+class RemoveBgDialog:
+    """點選背景色 → 移除相似顏色 → 存為帶 alpha 的 PNG"""
+
+    PREVIEW_MAX = 400  # 預覽最大邊長
+
+    def __init__(self, parent, image_path: str):
+        self.image_path = image_path
+        self.result_path: str | None = None
+
+        self.original = Image.open(image_path).convert("RGBA")
+        self._bg_color: tuple[int, int, int] | None = None
+        self._result_image: Image.Image | None = None
+
+        self.win = tk.Toplevel(parent)
+        self.win.title("色彩去背")
+        self.win.resizable(False, False)
+        self.win.grab_set()
+        self.win.attributes("-topmost", True)
+
+        tk.Label(
+            self.win, text="點擊圖片選取背景色，拖曳滑桿調整容差",
+        ).pack(padx=10, pady=5)
+
+        # ── 縮放比例 ──
+        w, h = self.original.size
+        self._scale = min(1.0, self.PREVIEW_MAX / max(w, h))
+        disp_w = int(w * self._scale)
+        disp_h = int(h * self._scale)
+
+        # ── Canvas 顯示圖片 ──
+        self.canvas = tk.Canvas(self.win, width=disp_w, height=disp_h)
+        self.canvas.pack(padx=10, pady=5)
+        self.canvas.bind("<Button-1>", self._on_click)
+
+        self._display_original()
+
+        # ── 容差滑桿 ──
+        frm_tol = tk.Frame(self.win)
+        frm_tol.pack(fill="x", padx=10, pady=2)
+        tk.Label(frm_tol, text="容差:").pack(side="left")
+        self.var_tolerance = tk.IntVar(value=30)
+        tk.Scale(
+            frm_tol, from_=0, to=100, orient="horizontal",
+            variable=self.var_tolerance, command=self._on_tolerance_change,
+        ).pack(side="left", fill="x", expand=True)
+
+        # ── 狀態 ──
+        self.lbl_info = tk.Label(self.win, text="尚未選取背景色", fg="#888888")
+        self.lbl_info.pack(padx=10)
+
+        # ── 按鈕 ──
+        frm_btns = tk.Frame(self.win)
+        frm_btns.pack(pady=10)
+        tk.Button(frm_btns, text="確定", width=10, command=self._ok).pack(
+            side="left", padx=10,
+        )
+        tk.Button(frm_btns, text="取消", width=10, command=self.win.destroy).pack(
+            side="left", padx=10,
+        )
+
+        self.win.wait_window()
+
+    # ── 繪製原圖 ──
+
+    def _display_original(self):
+        disp_w = int(self.original.size[0] * self._scale)
+        disp_h = int(self.original.size[1] * self._scale)
+        disp = self.original.resize((disp_w, disp_h), Image.LANCZOS)
+        self._photo = ImageTk.PhotoImage(disp)
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+
+    # ── 使用者點擊選色 ──
+
+    def _on_click(self, event):
+        ox = int(event.x / self._scale)
+        oy = int(event.y / self._scale)
+        w, h = self.original.size
+        if 0 <= ox < w and 0 <= oy < h:
+            r, g, b, _a = self.original.getpixel((ox, oy))
+            self._bg_color = (r, g, b)
+            self.lbl_info.config(
+                text=f"背景色: RGB({r}, {g}, {b})", fg="#333333",
+            )
+            self._apply_removal()
+
+    def _on_tolerance_change(self, _value):
+        if self._bg_color:
+            self._apply_removal()
+
+    # ── 去背演算法 ──
+
+    def _apply_removal(self):
+        if self._bg_color is None:
+            return
+        tolerance = self.var_tolerance.get()
+        arr = np.array(self.original, dtype=np.float32)
+        bg = np.array(self._bg_color, dtype=np.float32)
+        # 歐氏色彩距離
+        dist = np.sqrt(np.sum((arr[:, :, :3] - bg) ** 2, axis=2))
+        threshold = tolerance * 2.55  # 0~100 → 0~255
+        # 建立結果
+        result = np.array(self.original)
+        result[:, :, 3] = np.where(dist <= threshold, 0, 255).astype(np.uint8)
+        self._result_image = Image.fromarray(result, "RGBA")
+        self._display_result(result)
+
+    def _display_result(self, result_arr: np.ndarray):
+        """在 canvas 上顯示去背預覽（透明區域→洋紅）"""
+        preview = result_arr.copy()
+        transparent = preview[:, :, 3] == 0
+        preview[transparent, 0] = 255
+        preview[transparent, 1] = 0
+        preview[transparent, 2] = 255
+        preview[transparent, 3] = 255
+
+        disp_w = int(self.original.size[0] * self._scale)
+        disp_h = int(self.original.size[1] * self._scale)
+        disp = Image.fromarray(preview, "RGBA").resize(
+            (disp_w, disp_h), Image.LANCZOS,
+        )
+        self._photo = ImageTk.PhotoImage(disp)
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+
+    # ── 儲存結果 ──
+
+    def _ok(self):
+        if self._result_image is None:
+            self.win.destroy()
+            return
+        base = Path(self.image_path)
+        stem = base.stem
+        if stem.endswith("_nobg"):
+            save_name = stem + ".png"
+        else:
+            save_name = stem + "_nobg.png"
+        save_path = base.parent / save_name
+        self._result_image.save(str(save_path), "PNG")
+        self.result_path = str(save_path)
+        self.win.destroy()
