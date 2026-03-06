@@ -17,7 +17,7 @@ from PIL import Image, ImageGrab, ImageTk
 
 import profile_manager
 from automation import HookEngine
-from screen_capture import ocr_read_image
+from screen_capture import ocr_read_image, ocr_from_screen
 from models import (
     Action,
     ActionType,
@@ -69,10 +69,12 @@ class App:
 
         # combo 活躍狀態 (用於 GUI 指示燈)
         self._combo_active: dict[str, bool] = {}
-        # debug 模式：顯示即時信心度
+        # debug 模式：顯示即時信心度 + 螢幕框線
         self._debug_mode = tk.BooleanVar(value=False)
-        # combo_id → (found, confidence) 最新偵測結果
-        self._debug_data: dict[str, tuple[bool, float]] = {}
+        # combo_id → (found, confidence, match_rect|None) 最新偵測結果
+        self._debug_data: dict[str, tuple] = {}
+        # debug 覆蓋層視窗
+        self._debug_overlay: "DebugOverlay | None" = None
 
         # 記住目前 profile 的檔案路徑，儲存時寫回同一檔案
         self._profile_path: Path | None = None
@@ -130,6 +132,8 @@ class App:
         tk.Button(frm_combo_btns, text="編輯", command=self._edit_combo).pack(side="left", padx=2)
         tk.Button(frm_combo_btns, text="刪除", command=self._delete_combo).pack(side="left", padx=2)
         tk.Button(frm_combo_btns, text="啟用/停用", command=self._toggle_combo_enabled).pack(side="left", padx=2)
+        tk.Button(frm_combo_btns, text="▲ 上移", command=self._move_combo_up).pack(side="left", padx=2)
+        tk.Button(frm_combo_btns, text="▼ 下移", command=self._move_combo_down).pack(side="left", padx=2)
 
         # --- 偵測區域 ---
         frm_region = tk.LabelFrame(self.root, text="偵測區域 (留空=全螢幕)", padx=10, pady=5)
@@ -158,7 +162,8 @@ class App:
         self.lbl_cycles = tk.Label(frm_status, text="掃描: 0 次", fg="#666666")
         self.lbl_cycles.pack(side="right")
         tk.Checkbutton(
-            frm_status, text="Debug", variable=self._debug_mode,
+            frm_status, text="Debug 框線", variable=self._debug_mode,
+            command=self._on_debug_mode_toggle,
         ).pack(side="right", padx=10)
 
         # --- 啟動/停止 ---
@@ -363,6 +368,26 @@ class App:
             self._refresh_combo_tree()
             self._auto_save()
 
+    def _move_combo_up(self):
+        combo = self._get_selected_combo()
+        if combo:
+            idx = next((i for i, c in enumerate(self.profile.combos) if c.id == combo.id), None)
+            if idx is not None and idx > 0:
+                self.profile.combos[idx - 1], self.profile.combos[idx] = self.profile.combos[idx], self.profile.combos[idx - 1]
+                self._refresh_combo_tree()
+                self.tree.selection_set(combo.id)
+                self._auto_save()
+
+    def _move_combo_down(self):
+        combo = self._get_selected_combo()
+        if combo:
+            idx = next((i for i, c in enumerate(self.profile.combos) if c.id == combo.id), None)
+            if idx is not None and idx < len(self.profile.combos) - 1:
+                self.profile.combos[idx], self.profile.combos[idx + 1] = self.profile.combos[idx + 1], self.profile.combos[idx]
+                self._refresh_combo_tree()
+                self.tree.selection_set(combo.id)
+                self._auto_save()
+
     # ══════════════════════════════════════════════════════
     #  引擎控制
     # ══════════════════════════════════════════════════════
@@ -382,13 +407,47 @@ class App:
         self.engine.set_profile(self.profile)
         self.engine.start()
         self.btn_toggle.config(text="停止", bg="#F44336")
+        if self._debug_mode.get():
+            self._show_debug_overlay()
 
     def _stop(self):
         self.engine.stop()
         self._combo_active.clear()
         self._debug_data.clear()
+        self._hide_debug_overlay()
         self.btn_toggle.config(text="啟動", bg="#4CAF50")
         self._refresh_combo_tree()
+
+    # ══════════════════════════════════════════════════════
+    #  Debug 覆蓋層管理
+    # ══════════════════════════════════════════════════════
+
+    def _on_debug_mode_toggle(self):
+        if self._debug_mode.get() and self.engine.running:
+            self._show_debug_overlay()
+        else:
+            self._hide_debug_overlay()
+
+    def _show_debug_overlay(self):
+        if self._debug_overlay is None:
+            self._debug_overlay = DebugOverlay(self.root)
+
+    def _hide_debug_overlay(self):
+        if self._debug_overlay is not None:
+            self._debug_overlay.destroy()
+            self._debug_overlay = None
+
+    def _update_debug_overlay(self):
+        if self._debug_overlay is None:
+            return
+        rects = []
+        for combo in self.profile.combos:
+            if combo.id in self._debug_data:
+                found, conf, rect = self._debug_data[combo.id]
+                if rect:
+                    x, y, w, h = rect
+                    rects.append((x, y, w, h, combo.name, found, conf))
+        self._debug_overlay.update_rects(rects)
 
     # ══════════════════════════════════════════════════════
     #  引擎回呼 — worker thread 只往 Queue 塞訊息
@@ -397,9 +456,9 @@ class App:
     def _on_combo_triggered(self, combo_id: str, active: bool):
         self._msg_queue.append(("triggered", combo_id, active))
 
-    def _on_debug_info(self, combo_id: str, found: bool, confidence: float):
+    def _on_debug_info(self, combo_id: str, found: bool, confidence: float, match_rect=None):
         # 直接寫 dict（CPython GIL 保證 dict 寫入原子性）
-        self._debug_data[combo_id] = (found, confidence)
+        self._debug_data[combo_id] = (found, confidence, match_rect)
 
     def _on_cycle_complete(self, count: int):
         self._msg_queue.append(("cycle", count))
@@ -428,12 +487,14 @@ class App:
                 _, count = msg
                 self.lbl_cycles.config(text=f"掃描: {count} 次")
                 if self._debug_mode.get() and self._debug_data:
-                    for cid, (found, conf) in list(self._debug_data.items()):
+                    for cid, data in list(self._debug_data.items()):
+                        found, conf = data[0], data[1]
                         if self.tree.exists(cid):
                             cur = self.tree.item(cid, "values")
                             if cur:
                                 s = f"{conf:.2f} O" if found else f"{conf:.2f} X"
                                 self.tree.item(cid, values=(*cur[:4], s))
+                    self._update_debug_overlay()
             elif kind == "status":
                 _, running = msg
                 if running:
@@ -470,38 +531,59 @@ class ComboEditor:
 
         self.win = tk.Toplevel(parent)
         self.win.title("編輯 Combo")
-        self.win.geometry("420x720")
-        self.win.resizable(False, True)
+        self.win.geometry("420x740")
+        self.win.minsize(380, 500)
+        self.win.resizable(True, True)
         self.win.grab_set()
         self.win.attributes("-topmost", True)
 
         pad = {"padx": 10, "pady": 3}
 
+        # 確定/取消 — 先 pack 到底部，確保任何視窗大小都不被擠掉
+        frm_btns = tk.Frame(self.win)
+        frm_btns.pack(side="bottom", pady=10)
+        tk.Button(frm_btns, text="確定", width=10, command=self._ok).pack(side="left", padx=10)
+        tk.Button(frm_btns, text="取消", width=10, command=self.win.destroy).pack(side="left", padx=10)
+
+        # ── 可捲動內容區 ──────────────────────────────────────
+        _canvas = tk.Canvas(self.win, highlightthickness=0)
+        _vsb = ttk.Scrollbar(self.win, orient="vertical", command=_canvas.yview)
+        _canvas.configure(yscrollcommand=_vsb.set)
+        _vsb.pack(side="right", fill="y")
+        _canvas.pack(side="left", fill="both", expand=True)
+        sf = tk.Frame(_canvas)
+        _win_id = _canvas.create_window((0, 0), window=sf, anchor="nw")
+        sf.bind("<Configure>", lambda e: _canvas.configure(scrollregion=_canvas.bbox("all")))
+        _canvas.bind("<Configure>", lambda e: _canvas.itemconfigure(_win_id, width=e.width))
+        self.win.bind("<MouseWheel>", lambda e: _canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+
         # 名稱
-        tk.Label(self.win, text="名稱:").pack(anchor="w", **pad)
+        tk.Label(sf, text="名稱:").pack(anchor="w", **pad)
         self.var_name = tk.StringVar(value=combo.name)
-        tk.Entry(self.win, textvariable=self.var_name, width=40).pack(fill="x", **pad)
+        tk.Entry(sf, textvariable=self.var_name, width=40).pack(fill="x", **pad)
 
         # 圖片
-        frm_img = tk.Frame(self.win)
+        frm_img = tk.Frame(sf)
         frm_img.pack(fill="x", **pad)
         tk.Label(frm_img, text="觸發圖片:").pack(side="left")
         self.var_image = tk.StringVar(value=combo.image_path)
-        tk.Entry(frm_img, textvariable=self.var_image, width=22).pack(side="left", padx=5)
+        tk.Entry(frm_img, textvariable=self.var_image, width=22).pack(side="left", padx=5, fill="x", expand=True)
         tk.Button(frm_img, text="瀏覽", command=self._browse_image).pack(side="left", padx=2)
         tk.Button(frm_img, text="貼上", command=self._paste_image).pack(side="left", padx=2)
 
         # 圖片預覽（文字 + 去背按鈕 + 縮圖）
-        frm_preview = tk.Frame(self.win)
+        frm_preview = tk.Frame(sf)
         frm_preview.pack(fill="x", padx=10)
-        self.lbl_preview = tk.Label(frm_preview, text="", fg="#888888")
-        self.lbl_preview.pack(side="left")
         self.btn_rmbg = tk.Button(
             frm_preview, text="去背", command=self._remove_bg,
         )
+        self.btn_rmbg.pack(side="right", padx=5)
+        self.btn_rmbg.pack_forget()  # 初始隱藏，有圖才顯示
+        self.lbl_preview = tk.Label(frm_preview, text="", fg="#888888", anchor="w")
+        self.lbl_preview.pack(side="left", fill="x", expand=True)
 
         self._preview_photo = None  # 防止 GC 回收 PhotoImage
-        self.lbl_thumb = tk.Label(self.win, relief="groove")
+        self.lbl_thumb = tk.Label(sf, relief="groove")
         self.lbl_thumb.pack(anchor="w", padx=10, pady=2)
         self.lbl_thumb.pack_forget()  # 初始隱藏，有圖才顯示
 
@@ -513,7 +595,7 @@ class ComboEditor:
         self.win.bind("<Control-v>", lambda e: self._paste_image())
 
         # 比對閾值
-        frm_thresh = tk.Frame(self.win)
+        frm_thresh = tk.Frame(sf)
         frm_thresh.pack(fill="x", **pad)
         tk.Label(frm_thresh, text="圖片閾值:").pack(side="left")
         self.var_threshold = tk.StringVar(value=str(combo.match_threshold))
@@ -521,14 +603,18 @@ class ComboEditor:
         tk.Label(frm_thresh, text="(0.0~1.0, 越高越嚴格)").pack(side="left")
 
         # 文字驗證（可選）— 分兩行避免溢出
-        frm_vtext1 = tk.Frame(self.win)
+        frm_vtext1 = tk.Frame(sf)
         frm_vtext1.pack(fill="x", **pad)
         tk.Label(frm_vtext1, text="驗證文字:").pack(side="left")
         self.var_verify_text = tk.StringVar(value=combo.verify_text)
-        tk.Entry(frm_vtext1, textvariable=self.var_verify_text, width=20).pack(side="left", padx=5)
+        tk.Entry(frm_vtext1, textvariable=self.var_verify_text, width=20).pack(side="left", padx=5, fill="x", expand=True)
         tk.Label(frm_vtext1, text="(留空=不驗證)").pack(side="left")
 
-        frm_vtext2 = tk.Frame(self.win)
+        frm_vtext1b = tk.Frame(sf)
+        frm_vtext1b.pack(fill="x", padx=10, pady=1)
+        tk.Button(frm_vtext1b, text="螢幕截取 OCR", command=self._ocr_from_screen).pack(side="left")
+
+        frm_vtext2 = tk.Frame(sf)
         frm_vtext2.pack(fill="x", **pad)
         tk.Label(frm_vtext2, text="文字閾值:").pack(side="left")
         self.var_text_threshold = tk.StringVar(value=str(combo.text_threshold))
@@ -536,7 +622,7 @@ class ComboEditor:
         tk.Label(frm_vtext2, text="(0.0~1.0, OCR 信心度)").pack(side="left")
 
         # 匹配模式 + 吻合比例
-        frm_vtext3 = tk.Frame(self.win)
+        frm_vtext3 = tk.Frame(sf)
         frm_vtext3.pack(fill="x", **pad)
         tk.Label(frm_vtext3, text="匹配模式:").pack(side="left")
         self.var_text_match_mode = tk.StringVar(value=combo.text_match_mode.value)
@@ -558,9 +644,9 @@ class ComboEditor:
         self._on_match_mode_change()  # 初始顯示/隱藏
 
         # 觸發模式
-        tk.Label(self.win, text="觸發模式:").pack(anchor="w", **pad)
+        tk.Label(sf, text="觸發模式:").pack(anchor="w", **pad)
         self.var_trigger = tk.StringVar(value=combo.trigger.value)
-        frm_trigger = tk.Frame(self.win)
+        frm_trigger = tk.Frame(sf)
         frm_trigger.pack(fill="x", **pad)
         for mode in TriggerMode:
             tk.Radiobutton(
@@ -570,9 +656,9 @@ class ComboEditor:
             ).pack(anchor="w")
 
         # 動作類型
-        tk.Label(self.win, text="動作:").pack(anchor="w", **pad)
+        tk.Label(sf, text="動作:").pack(anchor="w", **pad)
         self.var_action_type = tk.StringVar(value=combo.action.action_type.value)
-        frm_at = tk.Frame(self.win)
+        frm_at = tk.Frame(sf)
         frm_at.pack(fill="x", **pad)
         action_types = list(ActionType)
         for i, at in enumerate(action_types):
@@ -583,7 +669,7 @@ class ComboEditor:
             ).grid(row=i // 3, column=i % 3, sticky="w", padx=5)
 
         # 動作參數
-        self.frm_params = tk.LabelFrame(self.win, text="動作參數", padx=10, pady=5)
+        self.frm_params = tk.LabelFrame(sf, text="動作參數", padx=10, pady=5)
         self.frm_params.pack(fill="x", padx=10, pady=5)
 
         # 滑鼠按鍵
@@ -618,9 +704,10 @@ class ComboEditor:
         self.var_duration = tk.StringVar(value=str(combo.action.duration))
         tk.Entry(self.frm_duration, textvariable=self.var_duration, width=8).pack(side="left", padx=5)
 
-        # 間隔
+        # 間隔 / 放開間隔
         self.frm_interval = tk.Frame(self.frm_params)
-        tk.Label(self.frm_interval, text="間隔(秒):").pack(side="left")
+        self._lbl_interval = tk.Label(self.frm_interval, text="間隔(秒):")
+        self._lbl_interval.pack(side="left")
         self.var_interval_min = tk.StringVar(value=str(combo.action.interval_min))
         self.var_interval_max = tk.StringVar(value=str(combo.action.interval_max))
         tk.Entry(self.frm_interval, textvariable=self.var_interval_min, width=6).pack(side="left", padx=2)
@@ -629,13 +716,37 @@ class ComboEditor:
 
         self._on_action_type_change()
 
-        # 確定/取消
-        frm_btns = tk.Frame(self.win)
-        frm_btns.pack(pady=10)
-        tk.Button(frm_btns, text="確定", width=10, command=self._ok).pack(side="left", padx=10)
-        tk.Button(frm_btns, text="取消", width=10, command=self.win.destroy).pack(side="left", padx=10)
-
         self.win.wait_window()
+
+    def _ocr_from_screen(self):
+        """截螢幕 ROI 做 OCR，填入驗證文字欄（與 runtime 相同管道）。"""
+        image_path = self.var_image.get().strip()
+        if not image_path:
+            return
+        try:
+            threshold = float(self.var_threshold.get())
+        except ValueError:
+            threshold = 0.8
+        # 隱藏視窗避免遮住遊戲畫面，截圖後再還原
+        self.win.withdraw()
+        self.win.update_idletasks()
+        text = ocr_from_screen(image_path, threshold)
+        self.win.deiconify()
+        if text:
+            self.var_verify_text.set(text)
+            self.lbl_preview.config(fg="#333333")
+        else:
+            self.lbl_preview.config(text="螢幕上找不到模板，請先確認遊戲畫面已顯示", fg="#cc0000")
+            return
+        # 還原預覽文字
+        path = image_path
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            w, h = img.size
+            self.lbl_preview.config(text=f"{Path(path).name} ({w}x{h})", fg="#333333")
+        except Exception:
+            pass
 
     def _update_preview(self, path: str, auto_ocr: bool = False):
         """載入圖片並顯示縮圖預覽。auto_ocr=True 時自動 OCR 帶入驗證文字。"""
@@ -649,7 +760,7 @@ class ComboEditor:
         self.lbl_preview.config(
             text=f"{Path(path).name} ({w}x{h})", fg="#333333",
         )
-        self.btn_rmbg.pack(side="left", padx=5)
+        self.btn_rmbg.pack(side="right", padx=5)
         # 縮放到最大 120px 高
         max_h = 120
         if h > max_h:
@@ -738,21 +849,24 @@ class ComboEditor:
         is_hold = at in ("hold_mouse", "hold_key")
         is_while_visible = trigger == "while_visible"
 
-        # while_visible + 長按：持續時間由圖片消失決定，不需要手動設定
-        need_duration = is_rapid or (is_hold and not is_while_visible)
+        # rapid/hold 都需要顯示持續時間
+        # hold + while_visible：持續(秒) = 每次按住多久，放開間隔 = 放開多久後再按
+        need_duration = is_rapid or is_hold
 
         # 先全部隱藏再按需顯示
-        for w in (self.frm_mouse_btn, self.frm_key, self.frm_duration, self.frm_interval):
+        for w in (self.frm_mouse_btn, self.frm_key, self.frm_delay,
+                  self.frm_duration, self.frm_interval):
             w.pack_forget()
 
         if is_mouse:
-            self.frm_mouse_btn.pack(fill="x")
+            self.frm_mouse_btn.pack(fill="x", pady=2)
         if is_key:
             self.frm_key.pack(fill="x", pady=2)
-        self.frm_delay.pack(fill="x", pady=2)  # 延遲始終顯示
+        self.frm_delay.pack(fill="x", pady=2)
         if need_duration:
             self.frm_duration.pack(fill="x", pady=2)
-        if is_rapid:
+        if is_rapid or is_hold:
+            self._lbl_interval.config(text="放開間隔(秒):" if is_hold else "間隔(秒):")
             self.frm_interval.pack(fill="x", pady=2)
 
     @staticmethod
@@ -782,8 +896,7 @@ class ComboEditor:
             is_mouse = at in ("click", "rapid_click", "hold_mouse")
             is_rapid = at in ("rapid_click", "rapid_key")
             is_hold = at in ("hold_mouse", "hold_key")
-            is_while_visible = self.var_trigger.get() == "while_visible"
-            need_duration = is_rapid or (is_hold and not is_while_visible)
+            need_duration = is_rapid or is_hold
 
             mouse_button = MouseButton(self.var_mouse_btn.get())
             key = self.var_key.get().strip()
@@ -794,9 +907,9 @@ class ComboEditor:
             duration = (self._to_float(self.var_duration.get(), 1.0)
                         if need_duration else self.combo.action.duration)
             interval_min = (self._to_float(self.var_interval_min.get(), 0.05)
-                            if is_rapid else self.combo.action.interval_min)
+                            if is_rapid or is_hold else self.combo.action.interval_min)
             interval_max = (self._to_float(self.var_interval_max.get(), 0.15)
-                            if is_rapid else self.combo.action.interval_max)
+                            if is_rapid or is_hold else self.combo.action.interval_max)
 
             # ── 全部合法才寫入（避免 partial update）──
             self.combo.name = name
@@ -1042,3 +1155,73 @@ class RemoveBgDialog:
         self._result_image.save(str(save_path), "PNG")
         self.result_path = str(save_path)
         self.win.destroy()
+
+
+# ══════════════════════════════════════════════════════════
+#  Debug 覆蓋層 — 全螢幕透明視窗顯示偵測框線
+# ══════════════════════════════════════════════════════════
+
+class DebugOverlay:
+    """在螢幕上疊加透明框線，標示每個 Combo 的偵測位置。
+    綠色框 = 已偵測到；紅色框 = 未偵測到（最後已知位置）。
+    視窗設為點擊穿透，不影響正常操作。
+    """
+
+    def __init__(self, root: tk.Tk):
+        self.win = tk.Toplevel(root)
+        self.win.overrideredirect(True)
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        self.win.geometry(f"{sw}x{sh}+0+0")
+        self.win.attributes("-topmost", True)
+        self.win.attributes("-transparentcolor", "black")
+        self.win.configure(bg="black")
+
+        self.canvas = tk.Canvas(
+            self.win, bg="black", highlightthickness=0,
+            width=sw, height=sh,
+        )
+        self.canvas.pack()
+
+        # 設為點擊穿透，不擋住滑鼠操作
+        self.win.update_idletasks()
+        self._set_click_through()
+
+    def _set_click_through(self):
+        try:
+            import ctypes
+            hwnd = self.win.winfo_id()
+            GWL_EXSTYLE = -20
+            WS_EX_TRANSPARENT = 0x00000020
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT)
+        except Exception:
+            pass
+
+    def update_rects(self, rects: list):
+        """更新框線。rects: list of (x, y, w, h, name, found, confidence)"""
+        self.canvas.delete("all")
+        for x, y, w, h, name, found, conf in rects:
+            color = "#00FF00" if found else "#FF4444"
+            # 框線
+            self.canvas.create_rectangle(
+                x, y, x + w, y + h,
+                outline=color, width=3,
+            )
+            # 標籤背景（用色塊遮住以利閱讀）
+            label = f" {name}  {conf:.2f} "
+            self.canvas.create_rectangle(
+                x, y - 20, x + len(label) * 7, y,
+                fill=color, outline="",
+            )
+            self.canvas.create_text(
+                x + 3, y - 10, text=label.strip(),
+                fill="black", anchor="w",
+                font=("Arial", 10, "bold"),
+            )
+
+    def destroy(self):
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
