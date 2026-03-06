@@ -117,6 +117,7 @@ class HookEngine:
         """處理單一 Combo 的偵測與觸發"""
         text_conf = 0.0
         confidence = 0.0
+        match_rect = None
 
         if not combo.image_path and combo.verify_text:
             # ── 純 OCR 模式：無觸發圖片，直接對整個 frame 做 OCR ──
@@ -151,7 +152,7 @@ class HookEngine:
                         fx -= region[0]
                         fy -= region[1]
                     roi = frame[max(0, fy):fy + th, max(0, fx):fx + tw]
-                    text_ok, text_conf = self._capture.ocr_verify(
+                    text_ok, text_conf, detected_text = self._capture.ocr_verify(
                         roi, combo.verify_text, combo.text_threshold,
                         match_mode=combo.text_match_mode.value,
                         match_ratio=combo.text_match_ratio,
@@ -160,18 +161,27 @@ class HookEngine:
                         found = False
                         print(
                             f"[{datetime.now():%Y%m%d %H:%M:%S}][ocr] '{combo.name}' "
-                            f"圖片匹配但文字不符 text_conf={text_conf:.3f}"
+                            f"圖片匹配但文字不符 text_conf={text_conf:.3f} "
+                            f"detected='{detected_text}'"
                         )
+
+            # 計算螢幕絕對座標框線（供 debug overlay 使用）
+            if pos and combo.image_path:
+                size = self._capture.get_template_size(combo.image_path)
+                if size:
+                    tw, th = size
+                    cx, cy = pos
+                    match_rect = (cx - tw // 2, cy - th // 2, tw, th)
 
         was_visible = self._prev_visible.get(combo.id, False)
         self._prev_visible[combo.id] = found
 
         # Debug callback — 每個週期都回報
         if self._on_debug_info:
-            self._on_debug_info(combo.id, found, confidence)
+            self._on_debug_info(combo.id, found, confidence, match_rect)
 
         # Debug log
-        if found and not was_visible:
+        if found:
             extra = f" text_conf={text_conf:.3f}" if combo.verify_text else ""
             print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 偵測到! confidence={confidence:.3f}{extra}")
         elif not found and was_visible:
@@ -263,16 +273,27 @@ class HookEngine:
 
         if at == ActionType.HOLD_MOUSE:
             import pyautogui
-            pyautogui.mouseDown(button=action.mouse_button.value)
-            self._wait_until_stopped(stop_event)
-            pyautogui.mouseUp(button=action.mouse_button.value)
+            btn = action.mouse_button.value
+            while not stop_event.is_set() and not self._stop_event.is_set():
+                pyautogui.mouseDown(button=btn)
+                self._interruptible_sleep_event(action.duration, stop_event)
+                pyautogui.mouseUp(button=btn)
+                if stop_event.is_set() or self._stop_event.is_set():
+                    break
+                gap = random.uniform(action.interval_min, action.interval_max)
+                self._interruptible_sleep_event(gap, stop_event)
             return
 
         if at == ActionType.HOLD_KEY:
             import pyautogui
-            pyautogui.keyDown(action.key)
-            self._wait_until_stopped(stop_event)
-            pyautogui.keyUp(action.key)
+            while not stop_event.is_set() and not self._stop_event.is_set():
+                pyautogui.keyDown(action.key)
+                self._interruptible_sleep_event(action.duration, stop_event)
+                pyautogui.keyUp(action.key)
+                if stop_event.is_set() or self._stop_event.is_set():
+                    break
+                gap = random.uniform(action.interval_min, action.interval_max)
+                self._interruptible_sleep_event(gap, stop_event)
             return
 
         while not stop_event.is_set() and not self._stop_event.is_set():
@@ -307,6 +328,16 @@ class HookEngine:
     def _wait_until_stopped(self, stop_event: threading.Event):
         while not stop_event.is_set() and not self._stop_event.is_set():
             time.sleep(0.05)
+
+    def _interruptible_sleep_event(self, seconds: float, stop_event: threading.Event):
+        """同時監聽 combo stop_event 與全局 _stop_event 的可中斷等待"""
+        step = 0.05
+        elapsed = 0.0
+        while elapsed < seconds:
+            if stop_event.is_set() or self._stop_event.is_set():
+                return
+            time.sleep(step)
+            elapsed += step
 
     def _notify_triggered(self, combo_id: str, active: bool):
         if self._on_combo_triggered:

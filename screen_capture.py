@@ -12,7 +12,8 @@ class ScreenCapture:
 
     def __init__(self):
         # 已載入的模板快取: image_path → (gray_template, w, h, mask_or_None)
-        self._cache: dict[str, tuple[np.ndarray, int, int, np.ndarray | None]] = {}
+        self._cache: dict[str, tuple[np.ndarray,
+                                     int, int, np.ndarray | None]] = {}
         # easyocr Reader（lazy init，首次使用時才載入）
         self._ocr_reader = None
 
@@ -33,7 +34,7 @@ class ScreenCapture:
             if img.ndim == 2:
                 gray = img
             elif img.shape[2] == 4:
-                # BGRA — 提取 alpha 通道作為 mask
+                # BGRA — 保留 alpha 作為 mask，搭配 TM_SQDIFF_NORMED 使用
                 alpha = img[:, :, 3]
                 mask = alpha if np.any(alpha == 0) else None
                 gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
@@ -88,13 +89,14 @@ class ScreenCapture:
             return False, 0.0, None
 
         if mask is not None:
-            # TM_CCORR_NORMED 是唯一支援 mask 的正向比對方法
-            result = cv2.matchTemplate(
-                frame, template, cv2.TM_CCORR_NORMED, mask=mask,
-            )
+            # TM_SQDIFF_NORMED 支援 mask，分數越低越相似（0=完美，1=最差）
+            result = cv2.matchTemplate(frame, template, cv2.TM_SQDIFF_NORMED, mask=mask)
+            min_val, _, min_loc, _ = cv2.minMaxLoc(result)
+            max_val = 1.0 - min_val
+            max_loc = min_loc
         else:
             result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
         if max_val >= threshold:
             cx = max_loc[0] + tw // 2
@@ -128,27 +130,42 @@ class ScreenCapture:
         threshold: float = 0.5,
         match_mode: str = "contains",
         match_ratio: float = 0.6,
-    ) -> tuple[bool, float]:
+    ) -> tuple[bool, float, str]:
         """對灰階 ROI 區域做 OCR，依匹配模式檢查文字。
         match_mode: "contains"=包含, "exact"=完全符合, "partial"=部分符合
-        回傳 (是否找到, 最高信心度)
+        回傳 (是否找到, 最高信心度, 偵測到的所有文字)
         """
         if roi.size == 0:
-            return False, 0.0
+            return False, 0.0, ""
+
         self._ensure_ocr()
         try:
             results = self._ocr_reader.readtext(roi)
         except Exception:
-            return False, 0.0
+            return False, 0.0, ""
 
         best_conf = 0.0
+        all_texts = [text for _bbox, text, _conf in results]
+        detected_str = " | ".join(all_texts)
+        confs = [conf for _bbox, _text, conf in results]
+        avg_conf = sum(confs) / len(confs) if confs else 0.0
+
+        # 先對「所有片段合併」做一次整體比對（解決 OCR 切段問題）
+        combined = "".join(all_texts)
+        if self._text_match(expected_text, combined, match_mode, match_ratio):
+            if avg_conf >= threshold:
+                return True, avg_conf, detected_str
+            best_conf = max(best_conf, avg_conf)
+
+        # 再逐段比對
         for _bbox, text, conf in results:
-            matched = self._text_match(expected_text, text, match_mode, match_ratio)
+            matched = self._text_match(
+                expected_text, text, match_mode, match_ratio)
             if matched and conf >= threshold:
-                return True, conf
+                return True, conf, detected_str
             if matched:
                 best_conf = max(best_conf, conf)
-        return False, best_conf
+        return False, best_conf, detected_str
 
     @staticmethod
     def _text_match(
@@ -167,6 +184,7 @@ class ScreenCapture:
 
 
 # ── 獨立 OCR 工具函式（GUI 等外部模組使用）─────────────────
+
 
 _shared_ocr_reader = None
 
@@ -190,6 +208,56 @@ def ocr_read_image(path: str) -> str:
         if img is None:
             return ""
         results = _shared_ocr_reader.readtext(img)
+        return "".join(text for _, text, _ in results)
+    except Exception:
+        return ""
+
+
+def ocr_from_screen(image_path: str, threshold: float = 0.8) -> str:
+    """在螢幕上找到模板位置，對該 ROI 做 OCR，回傳偵測文字。
+    與 runtime 使用相同管道，確保 verify_text 和執行期結果一致。
+    若模板未找到或發生錯誤，回傳空字串。
+    """
+    global _shared_ocr_reader
+    if _shared_ocr_reader is None:
+        try:
+            import easyocr
+        except ImportError:
+            return ""
+        _shared_ocr_reader = easyocr.Reader(
+            ["ch_tra", "en"], gpu=False, verbose=False,
+        )
+
+    try:
+        # 截彩色全螢幕
+        screenshot = ImageGrab.grab()
+        frame_bgr = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return ""
+
+    # 模板比對（找位置）
+    sc = ScreenCapture()
+    if not sc.load_template(image_path):
+        return ""
+    found, _conf, pos = sc.match_template(frame_gray, image_path, threshold)
+    if not found or pos is None:
+        return ""
+
+    # 取彩色 ROI
+    entry = sc._cache.get(image_path)
+    if entry is None:
+        return ""
+    _, tw, th, _ = entry
+    cx, cy = pos
+    x1 = max(0, cx - tw // 2)
+    y1 = max(0, cy - th // 2)
+    roi = frame_bgr[y1:y1 + th, x1:x1 + tw]
+    if roi.size == 0:
+        return ""
+
+    try:
+        results = _shared_ocr_reader.readtext(roi)
         return "".join(text for _, text, _ in results)
     except Exception:
         return ""
