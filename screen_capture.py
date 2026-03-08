@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import cv2
 import numpy as np
 from PIL import ImageGrab
+
+
+def _easyocr_model_dir() -> str | None:
+    """回傳打包後的模型目錄路徑，開發模式或目錄不存在時回傳 None（使用預設 ~/.EasyOCR/）。"""
+    if getattr(sys, '__compiled__', False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    local = os.path.join(base, "models")
+    return local if os.path.isdir(local) else None
 
 
 class ScreenCapture:
@@ -121,6 +133,7 @@ class ScreenCapture:
             import easyocr
             self._ocr_reader = easyocr.Reader(
                 ["ch_tra", "en"], gpu=False, verbose=False,
+                model_storage_directory=_easyocr_model_dir(),
             )
 
     def ocr_verify(
@@ -201,6 +214,7 @@ def ocr_read_image(path: str) -> str:
             return ""
         _shared_ocr_reader = easyocr.Reader(
             ["ch_tra", "en"], gpu=False, verbose=False,
+            model_storage_directory=_easyocr_model_dir(),
         )
     try:
         buf = np.fromfile(path, dtype=np.uint8)
@@ -226,6 +240,7 @@ def ocr_from_screen(image_path: str, threshold: float = 0.8) -> str:
             return ""
         _shared_ocr_reader = easyocr.Reader(
             ["ch_tra", "en"], gpu=False, verbose=False,
+            model_storage_directory=_easyocr_model_dir(),
         )
 
     try:
