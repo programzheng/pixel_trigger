@@ -5,3 +5,4 @@ profiles/
 .venv/
 __pycache__/
 .claude/
+models/

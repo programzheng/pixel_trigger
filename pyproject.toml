@@ -6,10 +6,19 @@ requires-python = ">=3.12"
 dependencies = [
     "opencv-python>=4.8.0",
     "pyautogui>=0.9.54",
+    "mss>=9.0.0",
     "keyboard>=0.13.5",
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
+    "easyocr>=1.7.0",
 ]
 
 [project.scripts]
 pixel-trigger = "main:main"
+
+[dependency-groups]
+dev = [
+    "nuitka>=2.0",
+    "ordered-set>=4.1.0",  # nuitka 依賴
+    "zstandard>=0.23.0",   # nuitka --onefile 壓縮
+]
