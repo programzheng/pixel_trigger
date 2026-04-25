@@ -1,0 +1,5 @@
+# Nuitka build outputs
+main.build/
+main.onefile-build/
+main.dist/
+*.exe
