@@ -12,10 +12,13 @@ pyautogui.PAUSE = 0
 
 # ── 滑鼠操作 ─────────────────────────────────────────────
 
-def mouse_click(button: str = "left", delay_min: float = 0, delay_max: float = 0):
+def mouse_click(button: str = "left", delay_min: float = 0, delay_max: float = 0, stop_event=None):
     """單擊滑鼠"""
     if delay_max > 0:
-        time.sleep(random.uniform(delay_min, delay_max))
+        if not _interruptible_sleep(random.uniform(delay_min, delay_max), stop_event):
+            return
+    if stop_event and stop_event.is_set():
+        return
     pyautogui.click(button=button)
 
 
@@ -41,17 +44,24 @@ def mouse_hold(
     stop_event=None,
 ):
     """長按滑鼠鍵"""
+    if stop_event and stop_event.is_set():
+        return
     pyautogui.mouseDown(button=button)
-    _interruptible_sleep(duration, stop_event)
-    pyautogui.mouseUp(button=button)
+    try:
+        _interruptible_sleep(duration, stop_event)
+    finally:
+        pyautogui.mouseUp(button=button)
 
 
 # ── 鍵盤操作 ─────────────────────────────────────────────
 
-def key_press(key: str, delay_min: float = 0, delay_max: float = 0):
+def key_press(key: str, delay_min: float = 0, delay_max: float = 0, stop_event=None):
     """按一下鍵盤鍵"""
     if delay_max > 0:
-        time.sleep(random.uniform(delay_min, delay_max))
+        if not _interruptible_sleep(random.uniform(delay_min, delay_max), stop_event):
+            return
+    if stop_event and stop_event.is_set():
+        return
     pyautogui.press(key)
 
 
@@ -73,19 +83,20 @@ def key_rapid_press(
 
 def key_hold(key: str, duration: float = 1.0, stop_event=None):
     """長按鍵盤鍵"""
+    if stop_event and stop_event.is_set():
+        return
     pyautogui.keyDown(key)
-    _interruptible_sleep(duration, stop_event)
-    pyautogui.keyUp(key)
+    try:
+        _interruptible_sleep(duration, stop_event)
+    finally:
+        pyautogui.keyUp(key)
 
 
 # ── 內部工具 ─────────────────────────────────────────────
 
 def _interruptible_sleep(seconds: float, stop_event=None):
     """可中斷的 sleep"""
-    step = 0.05
-    elapsed = 0.0
-    while elapsed < seconds:
-        if stop_event and stop_event.is_set():
-            break
-        time.sleep(step)
-        elapsed += step
+    if stop_event is not None:
+        return not stop_event.wait(max(0, seconds))
+    time.sleep(max(0, seconds))
+    return True

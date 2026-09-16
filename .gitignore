@@ -5,4 +5,6 @@ profiles/
 .venv/
 __pycache__/
 .claude/
+dist/pyinstaller/
+dist/pyinstaller-build/
 models/

@@ -4,9 +4,60 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import cv2
 import numpy as np
 from PIL import ImageGrab
+
+
+# ponytail: 等比例 0.5–4 倍；範圍不足時再擴大，不處理非等比例拉伸。
+MATCH_SCALES = (1.0,) + tuple(
+    sorted(({i / 20 for i in range(10, 81)} | {2 / 3, 4 / 3}) - {1.0},
+           key=lambda scale: abs(scale - 1.0))
+)
+
+
+def _best_template_match(frame, template, mask):
+    mode = cv2.TM_SQDIFF_NORMED if mask is not None else cv2.TM_CCOEFF_NORMED
+    result = cv2.matchTemplate(frame, template, mode, mask=mask)
+    result[~np.isfinite(result)] = np.inf if mask is not None else -1.0
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+    return (1.0 - min_val, min_loc) if mask is not None else (max_val, max_loc)
+
+
+def _refine_template_match(frame, template, mask, match, stop_event):
+    confidence, loc, size, scale = match
+    cx, cy = loc[0] + size[0] // 2, loc[1] + size[1] // 2
+    th, tw = template.shape
+    seen_sizes = set()
+    for offset in (0, 0.01, -0.01, 0.02, -0.02, 0.03, -0.03, 0.04, -0.04, 0.05, -0.05):
+        if stop_event is not None and stop_event.is_set():
+            break
+        candidate_scale = round(scale + offset, 6)
+        w, h = round(tw * candidate_scale), round(th * candidate_scale)
+        if not 0.5 <= candidate_scale <= 4 or min(w, h) < 2 or (w, h) in seen_sizes:
+            continue
+        seen_sizes.add((w, h))
+        margin = max(4, round(max(w, h) * 0.1))
+        x1, y1 = max(0, cx - w // 2 - margin), max(0, cy - h // 2 - margin)
+        roi = frame[y1:cy - h // 2 + h + margin, x1:cx - w // 2 + w + margin]
+        if roi.shape[0] < h or roi.shape[1] < w:
+            continue
+        scaled = cv2.resize(template, (w, h), interpolation=(
+            cv2.INTER_AREA if candidate_scale < 1 else cv2.INTER_LINEAR))
+        scaled_mask = (cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                       if mask is not None else None)
+        if scaled_mask is not None and not np.any(scaled_mask):
+            continue
+        if scaled_mask is None and np.std(scaled) == 0:
+            continue
+        score, point = _best_template_match(roi, scaled, scaled_mask)
+        if score > confidence:
+            confidence = score
+            match = (score, (point[0] + x1, point[1] + y1), (w, h), candidate_scale)
+        if confidence >= 0.999:
+            break
+    return match
 
 
 def _easyocr_model_dir() -> str | None:
@@ -26,6 +77,11 @@ class ScreenCapture:
         # 已載入的模板快取: image_path → (gray_template, w, h, mask_or_None)
         self._cache: dict[str, tuple[np.ndarray,
                                      int, int, np.ndarray | None]] = {}
+        self._match_state = threading.local()
+        self._preferred_scales: dict[str, float] = {}
+        self._last_matches: dict[str, tuple] = {}
+        self._scale_offsets: dict[str, int] = {}
+        self._ocr_lock = threading.Lock()
         # easyocr Reader（lazy init，首次使用時才載入）
         self._ocr_reader = None
 
@@ -62,6 +118,10 @@ class ScreenCapture:
     def unload_template(self, path: str):
         """從快取移除模板"""
         self._cache.pop(path, None)
+        getattr(self._match_state, "sizes", {}).pop(path, None)
+        self._preferred_scales.pop(path, None)
+        self._last_matches.pop(path, None)
+        self._scale_offsets.pop(path, None)
 
     def grab_frame(
         self, region: tuple[int, int, int, int] | None = None
@@ -86,10 +146,15 @@ class ScreenCapture:
         image_path: str,
         threshold: float = 0.8,
         region: tuple[int, int, int, int] | None = None,
+        scale_limit: int | None = None,
+        stop_event=None,
     ) -> tuple[bool, float, tuple[int, int] | None]:
-        """在已截取的 frame 中偵測模板圖片。
+        """先比對記住的比例（預設原尺寸），失敗才搜尋並記住新比例。
         回傳 (是否偵測到, 信心度, 螢幕絕對座標中心點 | None)
         """
+        if not hasattr(self._match_state, "sizes"):
+            self._match_state.sizes = {}
+        self._match_state.sizes.pop(image_path, None)
         if image_path not in self._cache:
             if not self.load_template(image_path):
                 return False, 0.0, None
@@ -97,28 +162,102 @@ class ScreenCapture:
         template, tw, th, mask = self._cache[image_path]
 
         fh, fw = frame.shape
-        if tw > fw or th > fh:
+        best_conf = 0.0
+        best_loc = None
+        best_size = None
+        best_scale = None
+        seen_sizes = set()
+        preferred_scale = self._preferred_scales.get(image_path, 1.0)
+        last_match = self._last_matches.get(image_path)
+        if last_match is not None and last_match[0] == region:
+            _, loc, size, scale = last_match
+            best_conf, best_loc, best_size, best_scale = _refine_template_match(
+                frame, template, mask, (0.0, loc, size, scale), stop_event)
+        fallback_scales = MATCH_SCALES[1:]
+        offset = self._scale_offsets.get(image_path, 0)
+        if scale_limit is not None:
+            fallback_scales = tuple(fallback_scales[(offset + i) % len(fallback_scales)]
+                                    for i in range(max(0, min(scale_limit, len(fallback_scales)))))
+            self._scale_offsets[image_path] = (offset + len(fallback_scales)) % (len(MATCH_SCALES) - 1)
+        search_frame = None
+        search_ratio = min(1.0, 960 / max(fw, fh))
+        scales = () if best_conf >= threshold else (preferred_scale, 1.0) + fallback_scales
+        for scale in scales:
+            if stop_event is not None and stop_event.is_set():
+                return False, 0.0, None
+            w, h = round(tw * scale), round(th * scale)
+            if w < 2 or h < 2 or w > fw or h > fh or (w, h) in seen_sizes:
+                continue
+            seen_sizes.add((w, h))
+            interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+            scaled = (template if (w, h) == (tw, th) else
+                      cv2.resize(template, (w, h), interpolation=interpolation))
+            if mask is not None:
+                scaled_mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                if not np.any(scaled_mask):
+                    continue
+            else:
+                scaled_mask = None
+                if np.std(scaled) == 0:
+                    continue
+            # 小圖維持原圖搜尋，避免縮圖後失去細節。
+            if (search_ratio < 1.0 and min(w, h) * search_ratio >= 16
+                    and scale not in (preferred_scale, 1.0)):
+                if search_frame is None:
+                    search_frame = cv2.resize(frame, None, fx=search_ratio, fy=search_ratio,
+                                              interpolation=cv2.INTER_AREA)
+                small_size = (max(2, round(w * search_ratio)), max(2, round(h * search_ratio)))
+                small_template = cv2.resize(scaled, small_size, interpolation=cv2.INTER_AREA)
+                small_mask = (cv2.resize(scaled_mask, small_size, interpolation=cv2.INTER_NEAREST)
+                              if scaled_mask is not None else None)
+                if small_mask is not None and not np.any(small_mask):
+                    continue
+                # ponytail: 每個比例只驗證一個候選位置；重複圖示需驗證多候選時再擴充。
+                _, loc = _best_template_match(search_frame, small_template, small_mask)
+                margin = int(np.ceil(2 / search_ratio)) + 2
+                x, y = round(loc[0] / search_ratio), round(loc[1] / search_ratio)
+                x1, y1 = max(0, x - margin), max(0, y - margin)
+                roi = frame[y1:min(fh, y + h + margin), x1:min(fw, x + w + margin)]
+                if roi.shape[0] < h or roi.shape[1] < w:
+                    continue
+                confidence, loc = _best_template_match(roi, scaled, scaled_mask)
+                loc = (loc[0] + x1, loc[1] + y1)
+            else:
+                confidence, loc = _best_template_match(frame, scaled, scaled_mask)
+            if confidence > best_conf:
+                best_conf, best_loc, best_size = confidence, loc, (w, h)
+                best_scale = scale
+            # 記住的比例或原尺寸符合就沿用，其餘比例選最高分。
+            if (scale in (preferred_scale, 1.0) and confidence >= threshold) or confidence >= 0.999:
+                break
+
+        # 近似匹配也細調，避免 5% 間隔剛好跳過小圖示的正確尺寸。
+        if scales and best_loc is not None and max(0.5, threshold - 0.2) <= best_conf < 0.999:
+            best_conf, best_loc, best_size, best_scale = _refine_template_match(
+                frame, template, mask, (best_conf, best_loc, best_size, best_scale), stop_event)
+        if stop_event is not None and stop_event.is_set():
             return False, 0.0, None
-
-        if mask is not None:
-            # TM_SQDIFF_NORMED 支援 mask，分數越低越相似（0=完美，1=最差）
-            result = cv2.matchTemplate(frame, template, cv2.TM_SQDIFF_NORMED, mask=mask)
-            min_val, _, min_loc, _ = cv2.minMaxLoc(result)
-            max_val = 1.0 - min_val
-            max_loc = min_loc
-        else:
-            result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
-
-        if max_val >= threshold:
-            cx = max_loc[0] + tw // 2
-            cy = max_loc[1] + th // 2
+        if best_loc is not None and best_conf >= threshold:
+            w, h = best_size
+            self._match_state.sizes[image_path] = best_size
+            self._preferred_scales[image_path] = best_scale
+            self._last_matches[image_path] = (region, best_loc, best_size, best_scale)
+            cx = best_loc[0] + w // 2
+            cy = best_loc[1] + h // 2
             if region:
                 cx += region[0]
                 cy += region[1]
-            return True, max_val, (cx, cy)
+            return True, best_conf, (cx, cy)
 
-        return False, max_val, None
+        return False, best_conf, None
+
+    def get_match_size(self, image_path: str) -> tuple[int, int] | None:
+        """回傳最近一次成功匹配的實際尺寸，供 OCR 與偵測框線使用。"""
+        return getattr(self._match_state, "sizes", {}).get(image_path)
+
+    def get_match_scale(self, image_path: str) -> float | None:
+        """回傳本次執行記住的比例；尚未匹配成功則回傳 None。"""
+        return self._preferred_scales.get(image_path)
 
     def get_template_size(self, image_path: str) -> tuple[int, int] | None:
         """回傳已快取模板的 (w, h)，未快取則回傳 None"""
@@ -151,11 +290,13 @@ class ScreenCapture:
         if roi.size == 0:
             return False, 0.0, ""
 
-        self._ensure_ocr()
-        try:
-            results = self._ocr_reader.readtext(roi)
-        except Exception:
-            return False, 0.0, ""
+        # ponytail: OCR 共用一份模型並序列化；需要平行 OCR 時再拆 reader。
+        with self._ocr_lock:
+            self._ensure_ocr()
+            try:
+                results = self._ocr_reader.readtext(roi)
+            except Exception:
+                return False, 0.0, ""
 
         best_conf = 0.0
         all_texts = [text for _bbox, text, _conf in results]
@@ -260,10 +401,10 @@ def ocr_from_screen(image_path: str, threshold: float = 0.8) -> str:
         return ""
 
     # 取彩色 ROI
-    entry = sc._cache.get(image_path)
-    if entry is None:
+    size = sc.get_match_size(image_path)
+    if size is None:
         return ""
-    _, tw, th, _ = entry
+    tw, th = size
     cx, cy = pos
     x1 = max(0, cx - tw // 2)
     y1 = max(0, cy - th // 2)

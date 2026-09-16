@@ -55,7 +55,7 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("PixelTrigger")
-        self.root.geometry("700x660")
+        self.root.geometry("780x660")
         self.root.resizable(True, False)
         self.root.attributes("-topmost", True)
 
@@ -110,18 +110,20 @@ class App:
         frm_combos.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Treeview
-        cols = ("enabled", "name", "trigger", "action", "status")
+        cols = ("enabled", "name", "trigger", "action", "status", "scale")
         self.tree = ttk.Treeview(frm_combos, columns=cols, show="headings", height=8)
         self.tree.heading("enabled", text="啟用")
         self.tree.heading("name", text="名稱")
         self.tree.heading("trigger", text="觸發模式")
         self.tree.heading("action", text="動作")
         self.tree.heading("status", text="狀態")
+        self.tree.heading("scale", text="匹配比例")
         self.tree.column("enabled", width=40, anchor="center", stretch=False)
         self.tree.column("name", width=180)
         self.tree.column("trigger", width=140)
         self.tree.column("action", width=150)
         self.tree.column("status", width=80, anchor="center", stretch=False)
+        self.tree.column("scale", width=80, anchor="center", stretch=False)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
 
@@ -315,14 +317,19 @@ class App:
             action_str = self._action_summary(combo.action)
             # debug 模式：顯示信心度；否則顯示活躍狀態
             if self._debug_mode.get() and combo.id in self._debug_data:
-                found, conf = self._debug_data[combo.id]
+                found, conf = self._debug_data[combo.id][:2]
                 status_str = f"{conf:.2f} O" if found else f"{conf:.2f} X"
             else:
                 active = self._combo_active.get(combo.id, False)
                 status_str = ">>>" if active else ""
             self.tree.insert("", "end", iid=combo.id, values=(
-                enabled_str, combo.name, trigger_str, action_str, status_str
+                enabled_str, combo.name, trigger_str, action_str, status_str,
+                self._match_scale_label(combo)
             ))
+
+    def _match_scale_label(self, combo: Combo) -> str:
+        scale = self.engine.get_match_scale(combo.image_path)
+        return f"{scale * 100:.1f}%" if scale is not None else "—"
 
     def _action_summary(self, action: Action) -> str:
         label = ACTION_LABELS.get(action.action_type, "?")
@@ -411,6 +418,8 @@ class App:
         self._sync_region_from_ui()
         self.engine.set_profile(self.profile)
         self.engine.start()
+        if not self.engine.running:
+            return
         self.btn_toggle.config(text="停止", bg="#F44336")
         if self._debug_mode.get():
             self._show_debug_overlay()
@@ -484,10 +493,7 @@ class App:
                 _, combo_id, active = msg
                 self._combo_active[combo_id] = active
                 if not self._debug_mode.get() and self.tree.exists(combo_id):
-                    cur = self.tree.item(combo_id, "values")
-                    if cur:
-                        s = ">>>" if active else ""
-                        self.tree.item(combo_id, values=(*cur[:4], s))
+                    self.tree.set(combo_id, "status", ">>>" if active else "")
             elif kind == "cycle":
                 _, count = msg
                 self.lbl_cycles.config(text=f"掃描: {count} 次")
@@ -495,10 +501,8 @@ class App:
                     for cid, data in list(self._debug_data.items()):
                         found, conf = data[0], data[1]
                         if self.tree.exists(cid):
-                            cur = self.tree.item(cid, "values")
-                            if cur:
-                                s = f"{conf:.2f} O" if found else f"{conf:.2f} X"
-                                self.tree.item(cid, values=(*cur[:4], s))
+                            s = f"{conf:.2f} O" if found else f"{conf:.2f} X"
+                            self.tree.set(cid, "status", s)
                     self._update_debug_overlay()
             elif kind == "status":
                 _, running = msg
@@ -508,6 +512,9 @@ class App:
                     self.lbl_status.config(text="已停止", fg="#888888")
             elif kind == "hotkey":
                 self.toggle()
+        for combo in self.profile.combos:
+            if self.tree.exists(combo.id):
+                self.tree.set(combo.id, "scale", self._match_scale_label(combo))
         self.root.after(150, self._poll_queue)
 
     # ══════════════════════════════════════════════════════

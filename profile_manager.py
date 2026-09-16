@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import sys
 from pathlib import Path
 
 from models import (
@@ -17,11 +15,10 @@ from models import (
 )
 
 # 打包後使用 exe 所在目錄，開發模式使用腳本所在目錄
-_BASE_DIR = (
-    Path(sys.executable).parent
-    if getattr(sys, "__compiled__", False)
-    else Path(__file__).parent
-)
+try:
+    _BASE_DIR = Path(__compiled__.containing_dir)
+except NameError:
+    _BASE_DIR = Path(__file__).resolve().parent
 
 PROFILES_DIR = _BASE_DIR / "profiles"
 TEMPLATES_DIR = _BASE_DIR / "templates"
