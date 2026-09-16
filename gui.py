@@ -236,7 +236,7 @@ class App:
             return
         self.profile.name = name
         self._sync_region_from_ui()
-        profile_manager.save_profile(self.profile)
+        self._profile_path = profile_manager.save_profile(self.profile)
         self._refresh_profile_list()
         paths = profile_manager.list_profiles()
         for i, p in enumerate(paths):
@@ -251,8 +251,13 @@ class App:
         self.profile = Profile(name=name)
         self._sync_region_to_ui()
         self._refresh_combo_tree()
-        profile_manager.save_profile(self.profile)
+        self._profile_path = profile_manager.save_profile(self.profile)
         self._refresh_profile_list()
+        paths = profile_manager.list_profiles()
+        for i, p in enumerate(paths):
+            if p == self._profile_path:
+                self.cmb_profile.current(i)
+                break
 
     # ══════════════════════════════════════════════════════
     #  偵測區域
