@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import input_controller
@@ -49,8 +50,11 @@ class HookEngine:
         self._profile = profile
         self._prev_visible.clear()
 
+    def get_match_scale(self, image_path: str) -> float | None:
+        return self._capture.get_match_scale(image_path)
+
     def start(self):
-        if self._running or not self._profile:
+        if self._running or not self._profile or (self._thread and self._thread.is_alive()):
             return
         self._running = True
         self._stop_event.clear()
@@ -66,19 +70,32 @@ class HookEngine:
             return
         self._running = False
         self._stop_event.set()
-        for evt in self._action_stop_events.values():
+        for evt in list(self._action_stop_events.values()):
             evt.set()
-        for t in self._active_actions.values():
+        for t in list(self._active_actions.values()):
             t.join(timeout=2)
         self._active_actions.clear()
         self._action_stop_events.clear()
         if self._thread:
             self._thread.join(timeout=5)
-            self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
         if self._on_status_change:
             self._on_status_change(False)
 
     def _scan_loop(self):
+        """每個 Combo 同時最多處理一張最新畫面，慢規則不阻塞其他規則。"""
+        workers = {}
+        try:
+            with ThreadPoolExecutor(max_workers=max(1, len(self._profile.combos))) as pool:
+                self._scan_frames(pool, workers)
+        finally:
+            self._stop_event.set()
+            self._running = False
+            if self._on_status_change:
+                self._on_status_change(False)
+
+    def _scan_frames(self, pool, workers):
         """主掃描迴圈 — 每週期只截圖一次"""
         while not self._stop_event.is_set():
             profile = self._profile
@@ -99,22 +116,27 @@ class HookEngine:
             for combo in enabled_combos:
                 if self._stop_event.is_set():
                     break
-                self._process_combo(combo, frame, profile.scan_region)
+                worker = workers.get(combo.id)
+                if worker is not None and not worker.done():
+                    continue
+                if worker is not None:
+                    worker.result()  # 讓執行錯誤顯示在終端機，不留下假的活躍狀態。
+                workers[combo.id] = pool.submit(self._process_combo, combo, frame, profile.scan_region)
 
             self.cycle_count += 1
-            # 每 10 次才更新 GUI，避免堵塞 tkinter
-            if self.cycle_count % 10 == 0 and self._on_cycle_complete:
+            # 每輪回報，GUI 在 main thread 定時更新。
+            if self._on_cycle_complete:
                 self._on_cycle_complete(self.cycle_count)
 
             interval = profile.scan_interval if profile else 0.1
             self._interruptible_sleep(interval)
 
-        self._running = False
-
     def _process_combo(
         self, combo: Combo, frame, region: tuple[int, int, int, int] | None
     ):
         """處理單一 Combo 的偵測與觸發"""
+        if self._stop_event.is_set():
+            return
         text_conf = 0.0
         confidence = 0.0
         match_rect = None
@@ -122,7 +144,7 @@ class HookEngine:
         if not combo.image_path and combo.verify_text:
             # ── 純 OCR 模式：無觸發圖片，直接對整個 frame 做 OCR ──
             found = False
-            text_ok, text_conf = self._capture.ocr_verify(
+            text_ok, text_conf, _detected_text = self._capture.ocr_verify(
                 frame, combo.verify_text, combo.text_threshold,
                 match_mode=combo.text_match_mode.value,
                 match_ratio=combo.text_match_ratio,
@@ -137,12 +159,13 @@ class HookEngine:
         else:
             # ── 圖片比對模式 ──
             found, confidence, pos = self._capture.match_template(
-                frame, combo.image_path, combo.match_threshold, region
+                frame, combo.image_path, combo.match_threshold, region,
+                scale_limit=1, stop_event=self._stop_event,
             )
 
             # 文字驗證（圖片匹配成功 + 有設定 verify_text 時才執行 OCR）
             if found and combo.verify_text and pos:
-                size = self._capture.get_template_size(combo.image_path)
+                size = self._capture.get_match_size(combo.image_path)
                 if size:
                     tw, th = size
                     # pos 是螢幕絕對座標中心，轉回 frame 相對座標
@@ -167,12 +190,14 @@ class HookEngine:
 
             # 計算螢幕絕對座標框線（供 debug overlay 使用）
             if pos and combo.image_path:
-                size = self._capture.get_template_size(combo.image_path)
+                size = self._capture.get_match_size(combo.image_path)
                 if size:
                     tw, th = size
                     cx, cy = pos
                     match_rect = (cx - tw // 2, cy - th // 2, tw, th)
 
+        if self._stop_event.is_set():
+            return
         was_visible = self._prev_visible.get(combo.id, False)
         self._prev_visible[combo.id] = found
 
@@ -190,8 +215,10 @@ class HookEngine:
         if combo.trigger == TriggerMode.ON_APPEAR:
             if found and not was_visible:
                 self._notify_triggered(combo.id, True)
-                self._execute_action_once(combo)
-                self._notify_triggered(combo.id, False)
+                try:
+                    self._execute_action_once(combo)
+                finally:
+                    self._notify_triggered(combo.id, False)
 
         elif combo.trigger == TriggerMode.WHILE_VISIBLE:
             if found:
@@ -209,7 +236,7 @@ class HookEngine:
 
         if at == ActionType.CLICK:
             input_controller.mouse_click(
-                action.mouse_button.value, action.delay_min, action.delay_max
+                action.mouse_button.value, action.delay_min, action.delay_max, self._stop_event
             )
         elif at == ActionType.RAPID_CLICK:
             input_controller.mouse_rapid_click(
@@ -225,7 +252,7 @@ class HookEngine:
             )
         elif at == ActionType.KEY_PRESS:
             input_controller.key_press(
-                action.key, action.delay_min, action.delay_max
+                action.key, action.delay_min, action.delay_max, self._stop_event
             )
         elif at == ActionType.RAPID_KEY:
             input_controller.key_rapid_press(
@@ -245,7 +272,7 @@ class HookEngine:
         self._action_stop_events[combo.id] = stop_evt
 
         t = threading.Thread(
-            target=self._continuous_action_loop,
+            target=self._run_continuous_action,
             args=(combo, stop_evt),
             daemon=True,
         )
@@ -253,6 +280,13 @@ class HookEngine:
         self._notify_triggered(combo.id, True)
         print(f"[{datetime.now():%Y%m%d %H:%M:%S}][action] '{combo.name}' → {combo.action.action_type.value} 持續中...")
         t.start()
+
+    def _run_continuous_action(self, combo: Combo, stop_event: threading.Event):
+        try:
+            self._continuous_action_loop(combo, stop_event)
+        finally:
+            if self._active_actions.get(combo.id) is threading.current_thread():
+                self._notify_triggered(combo.id, False)
 
     def _stop_continuous_action(self, combo_id: str):
         evt = self._action_stop_events.pop(combo_id, None)
@@ -276,8 +310,10 @@ class HookEngine:
             btn = action.mouse_button.value
             while not stop_event.is_set() and not self._stop_event.is_set():
                 pyautogui.mouseDown(button=btn)
-                self._interruptible_sleep_event(action.duration, stop_event)
-                pyautogui.mouseUp(button=btn)
+                try:
+                    self._interruptible_sleep_event(action.duration, stop_event)
+                finally:
+                    pyautogui.mouseUp(button=btn)
                 if stop_event.is_set() or self._stop_event.is_set():
                     break
                 gap = random.uniform(action.interval_min, action.interval_max)
@@ -288,8 +324,10 @@ class HookEngine:
             import pyautogui
             while not stop_event.is_set() and not self._stop_event.is_set():
                 pyautogui.keyDown(action.key)
-                self._interruptible_sleep_event(action.duration, stop_event)
-                pyautogui.keyUp(action.key)
+                try:
+                    self._interruptible_sleep_event(action.duration, stop_event)
+                finally:
+                    pyautogui.keyUp(action.key)
                 if stop_event.is_set() or self._stop_event.is_set():
                     break
                 gap = random.uniform(action.interval_min, action.interval_max)
@@ -299,7 +337,7 @@ class HookEngine:
         while not stop_event.is_set() and not self._stop_event.is_set():
             if at == ActionType.CLICK:
                 input_controller.mouse_click(
-                    action.mouse_button.value, action.delay_min, action.delay_max
+                    action.mouse_button.value, action.delay_min, action.delay_max, stop_event
                 )
             elif at == ActionType.RAPID_CLICK:
                 input_controller.mouse_rapid_click(
@@ -311,7 +349,7 @@ class HookEngine:
                 )
             elif at == ActionType.KEY_PRESS:
                 input_controller.key_press(
-                    action.key, action.delay_min, action.delay_max
+                    action.key, action.delay_min, action.delay_max, stop_event
                 )
             elif at == ActionType.RAPID_KEY:
                 input_controller.key_rapid_press(
