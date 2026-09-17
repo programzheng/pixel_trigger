@@ -11,6 +11,7 @@ from enum import Enum
 class TriggerMode(str, Enum):
     ON_APPEAR = "on_appear"            # 圖片出現時觸發一次
     WHILE_VISIBLE = "while_visible"    # 圖片可見期間持續執行，消失即停止
+    POSITION_CONTROL = "position_control"
 
 
 # ── 文字匹配模式 ────────────────────────────────────────────
@@ -87,6 +88,47 @@ class Action:
         )
 
 
+@dataclass
+class PositionControl:
+    region_space: str = "template"
+    region: tuple[int, int, int, int] | None = None
+    color: tuple[int, int, int] = (255, 185, 50)  # RGB
+    tolerance: int = 15  # HSV 色相容差，0~90
+    min_area: int = 20
+    press_at: float = 0.45
+    release_at: float = 0.75
+
+    def validate(self):
+        if self.region_space not in ("screen", "template"):
+            raise ValueError("位置控制區域格式不正確。")
+        if (self.region is None or len(self.region) != 4
+                or any(type(v) is not int for v in self.region)
+                or min(self.region[2:]) < 6):
+            raise ValueError("請設定位置控制的偵測區域（寬高至少 6）。")
+        if (len(self.color) != 3 or any(type(v) is not int or not 0 <= v <= 255
+                                       for v in self.color)):
+            raise ValueError("標記顏色必須是 RGB 0~255。")
+        if type(self.tolerance) is not int or not 0 <= self.tolerance <= 90:
+            raise ValueError("顏色容差必須介於 0~90。")
+        if type(self.min_area) is not int or self.min_area < 1:
+            raise ValueError("最小面積必須是正整數。")
+        if not 0 <= self.press_at < self.release_at <= 1:
+            raise ValueError("界線必須符合：0 ≤ 按住位置 < 放開位置 ≤ 100%。")
+
+    def to_dict(self) -> dict:
+        return {"region_space": self.region_space, "region": self.region, "color": self.color,
+                "tolerance": self.tolerance, "min_area": self.min_area,
+                "press_at": self.press_at, "release_at": self.release_at}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> PositionControl:
+        return cls(region_space=d.get("region_space", "screen" if d.get("region") else "template"),
+                   region=tuple(d["region"]) if d.get("region") else None,
+                   color=tuple(d.get("color", (255, 185, 50))),
+                   tolerance=d.get("tolerance", 15), min_area=d.get("min_area", 20),
+                   press_at=d.get("press_at", 0.45), release_at=d.get("release_at", 0.75))
+
+
 # ── Combo ─────────────────────────────────────────────────
 @dataclass
 class Combo:
@@ -109,6 +151,7 @@ class Combo:
 
     # 動作
     action: Action = field(default_factory=Action)
+    position_control: PositionControl = field(default_factory=PositionControl)
 
     def to_dict(self) -> dict:
         d = {
@@ -121,6 +164,8 @@ class Combo:
             "action": self.action.to_dict(),
         }
         # 只在有設定時才寫入，保持 JSON 簡潔
+        if self.trigger == TriggerMode.POSITION_CONTROL:
+            d["position_control"] = self.position_control.to_dict()
         if self.verify_text:
             d["verify_text"] = self.verify_text
             d["text_threshold"] = self.text_threshold
@@ -142,6 +187,7 @@ class Combo:
             text_match_ratio=d.get("text_match_ratio", 0.6),
             trigger=TriggerMode(d.get("trigger", "on_appear")),
             action=Action.from_dict(d.get("action", {})),
+            position_control=PositionControl.from_dict(d.get("position_control", {})),
         )
 
 
