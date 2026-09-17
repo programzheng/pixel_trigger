@@ -43,6 +43,14 @@ class PositionControlTest(unittest.TestCase):
         hsv = np.full((8, 8, 3), (179, 255, 255), dtype=np.uint8)
         self.assertIsNotNone(find_color_marker(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB), self.settings))
 
+    def test_transparent_pixels_are_not_marker_candidates(self):
+        frame = cv2.cvtColor(self.frame(30), cv2.COLOR_RGB2RGBA)
+        frame[15:25, 70:75, :3] = self.settings.color
+        frame[15:25, 70:75, 3] = 0
+        self.assertEqual(find_color_marker(frame, self.settings)[0], (30, 19.5))
+        frame[:, :, 3] = 0
+        self.assertIsNone(find_color_marker(frame, self.settings))
+
     def test_area_range_excludes_background_and_scales_with_template(self):
         settings = PositionControl(region=(0, 0, 100, 50), color=(255, 170, 41),
                                    tolerance=3, min_area=100, max_area=500)
