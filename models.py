@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -12,6 +13,11 @@ class TriggerMode(str, Enum):
     ON_APPEAR = "on_appear"            # 圖片出現時觸發一次
     WHILE_VISIBLE = "while_visible"    # 圖片可見期間持續執行，消失即停止
     POSITION_CONTROL = "position_control"
+    COLOR_BAND = "color_band"
+
+    @property
+    def tracks_marker(self) -> bool:
+        return self in (TriggerMode.POSITION_CONTROL, TriggerMode.COLOR_BAND)
 
 
 # ── 文字匹配模式 ────────────────────────────────────────────
@@ -106,6 +112,11 @@ class PositionControl:
     press_at: float = 0.45
     release_at: float = 0.75
     max_area: int = 0  # 0 = 不限制；模板模式以原圖像素面積設定
+    band_color: tuple[int, int, int] = (115, 170, 75)
+    band_tolerance: int = 15
+    band_start: float = 0.8
+    band_stop: float = 0.6
+    band_margin: float = 0.5  # 箭頭外框尺寸的倍數
 
     def validate(self):
         if self.region_space not in ("screen", "template"):
@@ -126,11 +137,23 @@ class PositionControl:
             raise ValueError("最大面積必須是 0（不限制），或不小於最小面積的整數。")
         if not 0 <= self.press_at < self.release_at <= 1:
             raise ValueError("界線必須符合：0 ≤ 按住位置 < 放開位置 ≤ 100%。")
+        if (len(self.band_color) != 3 or any(type(v) is not int or not 0 <= v <= 255
+                                            for v in self.band_color)):
+            raise ValueError("色帶顏色必須是 RGB 0~255。")
+        if type(self.band_tolerance) is not int or not 0 <= self.band_tolerance <= 90:
+            raise ValueError("色帶容差必須介於 0~90。")
+        if not 0 <= self.band_stop < self.band_start <= 1:
+            raise ValueError("色帶比例必須符合：0 ≤ 停止比例 < 啟動比例 ≤ 100%。")
+        if not math.isfinite(self.band_margin) or not 0.1 <= self.band_margin <= 3:
+            raise ValueError("取樣範圍必須介於箭頭大小的 0.1~3 倍。")
 
     def to_dict(self) -> dict:
         return {"region_space": self.region_space, "region": self.region, "color": self.color,
                 "tolerance": self.tolerance, "min_area": self.min_area, "max_area": self.max_area,
-                "press_at": self.press_at, "release_at": self.release_at}
+                "press_at": self.press_at, "release_at": self.release_at,
+                "band_color": self.band_color, "band_tolerance": self.band_tolerance,
+                "band_start": self.band_start, "band_stop": self.band_stop,
+                "band_margin": self.band_margin}
 
     @classmethod
     def from_dict(cls, d: dict) -> PositionControl:
@@ -139,7 +162,11 @@ class PositionControl:
                    color=tuple(d.get("color", (255, 185, 50))),
                    tolerance=d.get("tolerance", 15), min_area=d.get("min_area", 20),
                    press_at=d.get("press_at", 0.45), release_at=d.get("release_at", 0.75),
-                   max_area=d.get("max_area", 0))
+                   max_area=d.get("max_area", 0),
+                   band_color=tuple(d.get("band_color", (115, 170, 75))),
+                   band_tolerance=d.get("band_tolerance", 15),
+                   band_start=d.get("band_start", 0.8), band_stop=d.get("band_stop", 0.6),
+                   band_margin=d.get("band_margin", 0.5))
 
 
 # ── Combo ─────────────────────────────────────────────────
@@ -177,7 +204,7 @@ class Combo:
             "action": self.action.to_dict(),
         }
         # 只在有設定時才寫入，保持 JSON 簡潔
-        if self.trigger == TriggerMode.POSITION_CONTROL:
+        if self.trigger.tracks_marker:
             d["position_control"] = self.position_control.to_dict()
         if self.verify_text:
             d["verify_text"] = self.verify_text

@@ -41,6 +41,30 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
     return tuple(centers[index]), tuple(int(v) for v in stats[index, :4])
 
 
+def color_band_state(frame, marker, settings: PositionControl, active=False):
+    """排除箭頭後讀取附近色帶；回傳條件是否成立與有效像素中的指定色比例。"""
+    if frame is None or marker is None:
+        return False, None
+    x, y, w, h = marker[1]
+    margin = max(3, round(max(w, h) * settings.band_margin))
+    x1, y1 = max(0, x - margin), max(0, y - margin)
+    roi = frame[y1:y + h + margin, x1:x + w + margin]
+    hsv = cv2.cvtColor(roi[:, :, :3], cv2.COLOR_RGB2HSV).astype(np.int16)
+    # ponytail: 忽略低飽和與暗色像素以排除刻度／黑底；灰色色帶需另一種分類方式。
+    valid = (hsv[:, :, 1] >= 60) & (hsv[:, :, 2] >= 70)
+    padding = max(2, round(max(w, h) * 0.08))
+    valid[max(0, y - y1 - padding):y - y1 + h + padding,
+          max(0, x - x1 - padding):x - x1 + w + padding] = False
+    if roi.shape[2] == 4:
+        valid &= roi[:, :, 3] > 0
+    if np.count_nonzero(valid) < max(8, round(w * h * 0.05)):
+        return False, None
+    target = cv2.cvtColor(np.uint8([[settings.band_color]]), cv2.COLOR_RGB2HSV)[0, 0]
+    delta = np.abs(hsv[:, :, 0][valid] - int(target[0]))
+    ratio = float(np.mean(np.minimum(delta, 180 - delta) <= settings.band_tolerance))
+    return (ratio > settings.band_stop if active else ratio >= settings.band_start), ratio
+
+
 # ponytail: 等比例 0.5–4 倍；範圍不足時再擴大，不處理非等比例拉伸。
 MATCH_SCALES = (1.0,) + tuple(
     sorted(({i / 20 for i in range(10, 81)} | {2 / 3, 4 / 3}) - {1.0},

@@ -18,7 +18,7 @@ from PIL import Image, ImageGrab, ImageTk
 import profile_manager
 from window_target import list_windows
 from automation import HookEngine
-from screen_capture import find_color_marker, ocr_read_image, ocr_from_screen
+from screen_capture import find_color_marker, color_band_state, ocr_read_image, ocr_from_screen
 from models import (
     Action,
     ActionType,
@@ -36,6 +36,7 @@ TRIGGER_LABELS = {
     TriggerMode.ON_APPEAR: "出現時觸發一次",
     TriggerMode.WHILE_VISIBLE: "可見期間持續執行",
     TriggerMode.POSITION_CONTROL: "位置控制",
+    TriggerMode.COLOR_BAND: "色帶判斷（實驗）",
 }
 
 ACTION_LABELS = {
@@ -482,7 +483,7 @@ class App:
 
     def _start(self):
         enabled = [c for c in self.profile.combos if c.enabled and
-                   (c.image_path or c.verify_text or c.trigger == TriggerMode.POSITION_CONTROL)]
+                   (c.image_path or c.verify_text or c.trigger.tracks_marker)]
         if not enabled:
             messagebox.showwarning("提醒", "請啟用至少一個已設定圖片、文字或位置控制的 Combo。")
             return
@@ -1009,16 +1010,38 @@ class ComboEditor:
         self.var_position_max_area = tk.StringVar(value=str(settings.max_area))
         self.var_position_press = tk.StringVar(value=f"{settings.press_at * 100:g}")
         self.var_position_release = tk.StringVar(value=f"{settings.release_at * 100:g}")
+        self.var_band_color = tk.StringVar(value="#%02x%02x%02x" % settings.band_color)
+        self.var_band_tolerance = tk.StringVar(value=str(settings.band_tolerance))
+        self.var_band_start = tk.StringVar(value=f"{settings.band_start * 100:g}")
+        self.var_band_stop = tk.StringVar(value=f"{settings.band_stop * 100:g}")
+        self.var_band_margin = tk.StringVar(value=str(settings.band_margin))
+        self.position_only_rows = []
+        self.band_only_rows = []
         for label, var in (("標記顏色 (#RRGGBB)", self.var_position_color),
                            ("顏色容差 (0~90)", self.var_position_tolerance),
                            ("最小面積 (像素)", self.var_position_area),
                            ("最大面積 (0=不限)", self.var_position_max_area),
-                           ("按住位置 (%)", self.var_position_press),
-                           ("放開位置 (%)", self.var_position_release)):
+                           ("啟動位置 (%)", self.var_position_press),
+                           ("停止位置 (%)", self.var_position_release),
+                           ("執行色帶 (#RRGGBB)", self.var_band_color),
+                           ("色帶色相容差 (0~90)", self.var_band_tolerance),
+                           ("啟動色帶比例 (%)", self.var_band_start),
+                           ("停止色帶比例 (%)", self.var_band_stop),
+                           ("取樣範圍 (箭頭倍數)", self.var_band_margin)):
             row = tk.Frame(self.frm_position)
             row.pack(fill="x")
             tk.Label(row, text=label, width=22, anchor="w").pack(side="left")
             tk.Entry(row, textvariable=var, width=10).pack(side="left")
+            if var in (self.var_position_press, self.var_position_release):
+                self.position_only_rows.append(row)
+            if var in (self.var_band_color, self.var_band_tolerance, self.var_band_start,
+                       self.var_band_stop, self.var_band_margin):
+                self.band_only_rows.append(row)
+        self.lbl_band_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
+            text="色帶判斷：排除箭頭與白／暗色後取樣附近色帶。找不到箭頭就停止；同色背景可能使箭頭辨識失敗。")
+        self.lbl_control_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
+            text="條件成立時：單擊／按一下／點圖執行一次；連點／長按依時間與間隔重複。條件失效立即取消。")
+        self.lbl_control_hint.pack(anchor="w")
         self.var_position_preview = tk.BooleanVar(value=True)
         self._position_preview_job = None
         tk.Checkbutton(self.frm_position, text="預覽觸發圖片區塊",
@@ -1026,9 +1049,12 @@ class ComboEditor:
         self.var_position_click = tk.StringVar(value="取色")
         row = tk.Frame(self.frm_position)
         row.pack(fill="x")
-        for mode in ("取色", "按住線", "放開線"):
-            tk.Radiobutton(row, text=mode, variable=self.var_position_click,
-                           value=mode).pack(side="left")
+        self.position_tools = []
+        for mode in ("取色", "按住線", "放開線", "色帶取色"):
+            label = {"按住線": "啟動線", "放開線": "停止線"}.get(mode, mode)
+            button = tk.Radiobutton(row, text=label, variable=self.var_position_click, value=mode)
+            button.pack(side="left")
+            self.position_tools.append(button)
         self.position_canvas = tk.Canvas(self.frm_position, width=340, height=170,
                                          bg="#222222", highlightthickness=0)
         self.position_canvas.pack(anchor="w")
@@ -1045,6 +1071,9 @@ class ComboEditor:
         value = self.var_position_color.get().strip()
         if len(value) != 7 or not value.startswith("#"):
             raise ValueError("標記顏色格式必須是 #RRGGBB。")
+        band_color = self.var_band_color.get().strip()
+        if len(band_color) != 7 or not band_color.startswith("#"):
+            raise ValueError("色帶顏色格式必須是 #RRGGBB。")
         settings = PositionControl(
             region=tuple(int(var.get()) for var in self.position_region_vars),
             color=tuple(int(value[i:i + 2], 16) for i in (1, 3, 5)),
@@ -1052,7 +1081,12 @@ class ComboEditor:
             min_area=int(self.var_position_area.get()),
             max_area=int(self.var_position_max_area.get()),
             press_at=self._to_float(self.var_position_press.get()) / 100,
-            release_at=self._to_float(self.var_position_release.get()) / 100)
+            release_at=self._to_float(self.var_position_release.get()) / 100,
+            band_color=tuple(int(band_color[i:i + 2], 16) for i in (1, 3, 5)),
+            band_tolerance=int(self.var_band_tolerance.get()),
+            band_start=self._to_float(self.var_band_start.get()) / 100,
+            band_stop=self._to_float(self.var_band_stop.get()) / 100,
+            band_margin=self._to_float(self.var_band_margin.get()))
         settings.validate()
         try:
             with Image.open(self.var_image.get().strip()) as image:
@@ -1106,7 +1140,9 @@ class ComboEditor:
             canvas = self.position_canvas
             canvas.delete("all")
             canvas.create_image(0, 0, image=self._position_photo, anchor="nw")
-            for fraction, color in ((settings.press_at, "#00ff88"), (settings.release_at, "#ff5555")):
+            band_mode = self.var_trigger.get() == TriggerMode.COLOR_BAND.value
+            for fraction, color in (() if band_mode else
+                                    ((settings.press_at, "#00ff88"), (settings.release_at, "#ff5555"))):
                 x = fraction * (width - 1)
                 canvas.create_line(x, 0, x, height, fill=color, width=2)
             marker = find_color_marker(frame, settings)
@@ -1114,9 +1150,14 @@ class ComboEditor:
                 (cx, cy), _ = marker
                 px, py = cx * scale, cy * scale
                 canvas.create_oval(px - 4, py - 4, px + 4, py + 4, outline="cyan", width=2)
-                self.lbl_position_status.config(text=f"標記位置：{cx / max(1, w - 1):.1%}；綠線按住、紅線放開。")
+                self.lbl_position_status.config(text=f"標記位置：{cx / max(1, w - 1):.1%}；綠線啟動、紅線停止。")
             else:
-                self.lbl_position_status.config(text="未找到唯一標記：調整顏色／容差／區域。此時會放開。")
+                self.lbl_position_status.config(text="未找到唯一標記：調整顏色／容差／區域。此時會停止動作。")
+            if band_mode:
+                active, ratio = color_band_state(frame, marker, settings)
+                text = ("箭頭或色帶取樣不足：停止" if ratio is None else
+                        f"執行色帶比例：{ratio:.1%}；{'可啟動動作' if active else '未達啟動比例'}")
+                self.lbl_position_status.config(text=text)
         except (ValueError, TypeError, OSError) as e:
             self._position_frame = None
             self.position_canvas.delete("all")
@@ -1130,13 +1171,14 @@ class ComboEditor:
         if not (0 <= event.x < width and 0 <= event.y < height):
             return
         mode = self.var_position_click.get()
-        if mode == "取色":
+        if mode in ("取色", "色帶取色"):
             x = min(frame.shape[1] - 1, int(event.x * frame.shape[1] / width))
             y = min(frame.shape[0] - 1, int(event.y * frame.shape[0] / height))
             if frame.shape[2] == 4 and frame[y, x, 3] == 0:
                 self.lbl_position_status.config(text="透明區域不能取色，請點選可見的箭頭。")
                 return
-            self.var_position_color.set("#%02x%02x%02x" % tuple(frame[y, x, :3]))
+            variable = self.var_band_color if mode == "色帶取色" else self.var_position_color
+            variable.set("#%02x%02x%02x" % tuple(frame[y, x, :3]))
         else:
             var = self.var_position_press if mode == "按住線" else self.var_position_release
             var.set(f"{event.x / max(1, width - 1) * 100:.1f}")
@@ -1157,7 +1199,21 @@ class ComboEditor:
         """根據動作類型 + 觸發模式，顯示/隱藏相關參數"""
         at = self.var_action_type.get()
         trigger = self.var_trigger.get()
-        position_mode = trigger == TriggerMode.POSITION_CONTROL.value
+        position_mode = TriggerMode(trigger).tracks_marker
+        band_mode = trigger == TriggerMode.COLOR_BAND.value
+        self.frm_position.config(text="色帶判斷設定" if band_mode else "位置控制設定")
+        for row in self.position_only_rows + self.band_only_rows:
+            row.pack_forget()
+        for row in self.band_only_rows if band_mode else self.position_only_rows:
+            row.pack(fill="x", before=self.lbl_control_hint)
+        self.lbl_band_hint.pack_forget()
+        if band_mode:
+            self.lbl_band_hint.pack(anchor="w", before=self.lbl_control_hint)
+        for button in self.position_tools:
+            button.pack_forget()
+        for button in ([self.position_tools[0], self.position_tools[3]] if band_mode else self.position_tools[:3]):
+            button.pack(side="left")
+        self.var_position_click.set("取色")
         for widget in self.image_widgets:
             widget.pack_forget()
         for widget, options in self.image_pack.items():
@@ -1170,14 +1226,13 @@ class ComboEditor:
         self.lbl_action.pack_forget()
         self.frm_action_types.pack_forget()
         if position_mode:
-            self.var_action_type.set(ActionType.HOLD_MOUSE.value)
             self.frm_position.pack(fill="x", padx=10, pady=5, before=self.frm_params)
             self.var_position_preview.set(True)
             self._preview_position()
         else:
-            self.lbl_action.pack(anchor="w", padx=10, pady=3, before=self.frm_params)
-            self.frm_action_types.pack(fill="x", padx=10, pady=3, before=self.frm_params)
             self.var_position_preview.set(False)
+        self.lbl_action.pack(anchor="w", padx=10, pady=3, before=self.frm_params)
+        self.frm_action_types.pack(fill="x", padx=10, pady=3, before=self.frm_params)
         at = self.var_action_type.get()
 
         is_mouse = at in ("click", "click_image", "rapid_click", "hold_mouse")
@@ -1201,11 +1256,10 @@ class ComboEditor:
             self.frm_target.pack(fill="x", pady=2)
         if is_key:
             self.frm_key.pack(fill="x", pady=2)
-        if not position_mode:
-            self.frm_delay.pack(fill="x", pady=2)
-        if need_duration and not position_mode:
+        self.frm_delay.pack(fill="x", pady=2)
+        if need_duration:
             self.frm_duration.pack(fill="x", pady=2)
-        if (is_rapid or is_hold) and not position_mode:
+        if is_rapid or is_hold:
             self._lbl_interval.config(text="放開間隔(秒):" if is_hold else "間隔(秒):")
             self.frm_interval.pack(fill="x", pady=2)
 
@@ -1230,7 +1284,7 @@ class ComboEditor:
                 else self.combo.text_match_ratio
             )
             trigger = TriggerMode(self.var_trigger.get())
-            position_settings = self._position_settings() if trigger == TriggerMode.POSITION_CONTROL else self.combo.position_control
+            position_settings = self._position_settings() if trigger.tracks_marker else self.combo.position_control
 
             at = self.var_action_type.get()
             action_type = ActionType(at)
