@@ -1067,7 +1067,7 @@ class ComboEditor:
     def _select_position_region(self):
         try:
             with Image.open(self.var_image.get().strip()) as image:
-                image = image.convert("RGB")
+                image = image.convert("RGBA")
         except (OSError, ValueError):
             messagebox.showinfo("提示", "請先指定有效的觸發圖片。", parent=self.win)
             return
@@ -1094,7 +1094,7 @@ class ComboEditor:
             settings = self._position_settings()
             with Image.open(self.var_image.get().strip()) as image:
                 x, y, w, h = settings.region
-                frame = np.array(image.convert("RGB").crop((x, y, x + w, y + h)))
+                frame = np.array(image.convert("RGBA").crop((x, y, x + w, y + h)))
             self._position_frame = frame
             if frame is None:
                 raise ValueError("無法擷取畫面。")
@@ -1133,7 +1133,10 @@ class ComboEditor:
         if mode == "取色":
             x = min(frame.shape[1] - 1, int(event.x * frame.shape[1] / width))
             y = min(frame.shape[0] - 1, int(event.y * frame.shape[0] / height))
-            self.var_position_color.set("#%02x%02x%02x" % tuple(frame[y, x]))
+            if frame.shape[2] == 4 and frame[y, x, 3] == 0:
+                self.lbl_position_status.config(text="透明區域不能取色，請點選可見的箭頭。")
+                return
+            self.var_position_color.set("#%02x%02x%02x" % tuple(frame[y, x, :3]))
         else:
             var = self.var_position_press if mode == "按住線" else self.var_position_release
             var.set(f"{event.x / max(1, width - 1) * 100:.1f}")

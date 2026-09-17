@@ -17,13 +17,15 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
     # ponytail: 顏色與面積需能排除背景；同大小的同色色塊仍需形狀辨識。
     if frame is None or frame.size == 0:
         return None
-    hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV).astype(np.int16)
+    hsv = cv2.cvtColor(frame[:, :, :3], cv2.COLOR_RGB2HSV).astype(np.int16)
     target = cv2.cvtColor(np.uint8([[settings.color]]), cv2.COLOR_RGB2HSV)[0, 0]
     hue_delta = np.abs(hsv[:, :, 0] - int(target[0]))
     hue_delta = np.minimum(hue_delta, 180 - hue_delta)
     mask = ((hue_delta <= settings.tolerance)
             & (np.abs(hsv[:, :, 1] - int(target[1])) <= 80)
             & (np.abs(hsv[:, :, 2] - int(target[2])) <= 80)).astype(np.uint8)
+    if frame.shape[2] == 4:
+        mask[frame[:, :, 3] == 0] = 0
     _, _, stats, centers = cv2.connectedComponentsWithStats(mask)
     areas = stats[1:, cv2.CC_STAT_AREA]
     area_scale = 1.0

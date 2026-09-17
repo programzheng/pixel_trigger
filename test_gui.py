@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import tkinter as tk
@@ -11,6 +12,43 @@ from models import Action, ActionType, Combo, PositionControl, Profile, TriggerM
 
 
 class ComboScaleDisplayTest(unittest.TestCase):
+    def test_position_selection_and_preview_preserve_transparency(self):
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "transparent.png"
+                image = Image.new("RGBA", (50, 40), (255, 170, 41, 0))
+                image.paste((255, 170, 41, 255), (10, 10, 20, 20))
+                image.save(path)
+                combo = Combo(image_path=str(path), trigger=TriggerMode.POSITION_CONTROL,
+                              action=Action(action_type=ActionType.HOLD_MOUSE),
+                              position_control=PositionControl(region=(0, 0, 50, 40),
+                                                               color=(255, 170, 41)))
+                with patch.object(tk.Toplevel, "wait_window"):
+                    editor = ComboEditor(root, combo)
+                try:
+                    with patch("gui.ImageRegionSelector") as selector:
+                        selector.return_value.result = None
+                        editor._select_position_region()
+                        selected_image = selector.call_args.args[1]
+                        self.assertEqual(selected_image.mode, "RGBA")
+                        self.assertEqual(selected_image.getpixel((0, 0))[3], 0)
+                    self.assertIn("標記位置", editor.lbl_position_status.cget("text"))
+                    self.assertTrue(editor.win.tk.call(str(editor._position_photo),
+                                                       "transparency", "get", 0, 0))
+                    editor.var_position_color.set("#ffffff")
+                    editor._position_preview_click(SimpleNamespace(x=0, y=0))
+                    self.assertEqual(editor.var_position_color.get(), "#ffffff")
+                    width, height = editor._position_preview_size
+                    editor._position_preview_click(SimpleNamespace(x=15 * width // 50,
+                                                                   y=15 * height // 40))
+                    self.assertEqual(editor.var_position_color.get(), "#ffaa29")
+                finally:
+                    editor.win.destroy()
+        finally:
+            root.destroy()
+
     def test_position_editor_keeps_image_preview_after_save_and_reopen(self):
         root = tk.Tk()
         root.withdraw()
@@ -32,7 +70,7 @@ class ComboScaleDisplayTest(unittest.TestCase):
                     self.assertEqual(reopened.var_image.get(), str(path))
                     self.assertEqual(reopened.lbl_thumb.winfo_manager(), "pack")
                     self.assertTrue(reopened.lbl_thumb.cget("image"))
-                    self.assertEqual(reopened._position_frame.shape, (40, 50, 3))
+                    self.assertEqual(reopened._position_frame.shape, (40, 50, 4))
                     for mode in (TriggerMode.ON_APPEAR, TriggerMode.POSITION_CONTROL):
                         reopened.var_trigger.set(mode.value)
                         reopened._on_action_type_change()
