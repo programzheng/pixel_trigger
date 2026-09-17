@@ -14,7 +14,7 @@ from models import Combo, PositionControl
 
 def find_color_marker(frame: np.ndarray, settings: PositionControl):
     """從 RGB 區域找唯一的色彩標記；多個候選時不猜測。"""
-    # ponytail: 區域內需只有一個同色標記；同色背景無法排除時再加形狀辨識。
+    # ponytail: 顏色與面積需能排除背景；同大小的同色色塊仍需形狀辨識。
     if frame is None or frame.size == 0:
         return None
     hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV).astype(np.int16)
@@ -25,7 +25,14 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
             & (np.abs(hsv[:, :, 1] - int(target[1])) <= 80)
             & (np.abs(hsv[:, :, 2] - int(target[2])) <= 80)).astype(np.uint8)
     _, _, stats, centers = cv2.connectedComponentsWithStats(mask)
-    candidates = np.flatnonzero(stats[1:, cv2.CC_STAT_AREA] >= settings.min_area) + 1
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    area_scale = 1.0
+    if settings.max_area and settings.region_space == "template" and settings.region:
+        area_scale = frame.shape[0] * frame.shape[1] / (settings.region[2] * settings.region[3])
+    eligible = areas >= settings.min_area * area_scale
+    if settings.max_area:
+        eligible &= areas <= settings.max_area * area_scale
+    candidates = np.flatnonzero(eligible) + 1
     if len(candidates) != 1:
         return None
     index = candidates[0]

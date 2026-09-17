@@ -43,6 +43,27 @@ class PositionControlTest(unittest.TestCase):
         hsv = np.full((8, 8, 3), (179, 255, 255), dtype=np.uint8)
         self.assertIsNotNone(find_color_marker(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB), self.settings))
 
+    def test_area_range_excludes_background_and_scales_with_template(self):
+        settings = PositionControl(region=(0, 0, 100, 50), color=(255, 170, 41),
+                                   tolerance=3, min_area=100, max_area=500)
+        frame = np.zeros((50, 100, 3), dtype=np.uint8)
+        frame[20:35, 10:30] = settings.color  # 標記：300 像素
+        frame[5:45, 60:95] = settings.color  # 同色背景：1400 像素
+        frame[0:5, 40:50] = settings.color  # 同色碎片：50 像素
+        for scale in (0.5, 1, 2):
+            scaled = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+            marker = find_color_marker(scaled, settings)
+            self.assertIsNotNone(marker)
+            self.assertLess(marker[0][0], 30 * scale)
+        frame[20:35, 35:55] = settings.color
+        self.assertIsNone(find_color_marker(frame, settings))
+        self.assertEqual(PositionControl.from_dict(settings.to_dict()), settings)
+        self.assertEqual(PositionControl.from_dict({}).max_area, 0)
+        for value in (-1, 50, 1.5):
+            settings.max_area = value
+            with self.assertRaises(ValueError):
+                settings.validate()
+
     def test_hysteresis_missing_marker_and_stop_release(self):
         engine = HookEngine()
         engine.set_profile(Profile(combos=[self.combo]))
@@ -78,7 +99,7 @@ class PositionControlTest(unittest.TestCase):
             input_controller.release_mouse()
             up.assert_called_once_with(0, 0, "left")
 
-    def test_profile_roundtrip_validation_and_button_conflict(self):
+    def test_profile_roundtrip_validation_and_shared_button(self):
         profile = Profile(combos=[self.combo])
         loaded = Profile.from_dict(json.loads(json.dumps(profile.to_dict())))
         self.assertEqual(loaded, profile)
@@ -92,9 +113,61 @@ class PositionControlTest(unittest.TestCase):
                 PositionControl(region=(0, 0, 100, 40), press_at=press, release_at=release).validate()
         engine = HookEngine()
         engine.set_profile(Profile(combos=[self.combo, Combo(image_path="other.png")]))
-        with self.assertRaises(ValueError):
+        with patch("automation.threading.Thread") as thread:
+            thread.return_value.is_alive.return_value = False
             engine.start()
+            self.assertTrue(engine.running)
+            engine.stop()
         self.assertFalse(engine.running)
+
+    def test_shared_click_waits_for_position_release_and_can_be_cancelled(self):
+        click_combo = Combo(action=Action(action_type=ActionType.CLICK))
+        engine = HookEngine()
+        engine.set_profile(Profile(combos=[self.combo, click_combo]))
+        held, release, clicked = (threading.Event() for _ in range(3))
+        stopped = threading.Event()
+        position_thread = threading.Thread(target=engine._position_control_loop,
+                                           args=(self.combo, stopped))
+        click_thread = threading.Thread(target=engine._execute_action_once, args=(click_combo,))
+        with patch.object(engine._capture, "position_frame",
+                          side_effect=lambda *a, **kw: (self.frame(80 if release.is_set() else 30),
+                                                       self.settings.region)), \
+                patch.object(input_controller.pyautogui, "mouseDown", side_effect=lambda **kw: held.set()), \
+                patch.object(input_controller, "release_mouse") as up, \
+                patch.object(input_controller, "mouse_click", side_effect=lambda *a: clicked.set()), \
+                patch.object(input_controller, "key_press") as key:
+            try:
+                position_thread.start()
+                self.assertTrue(held.wait(1))
+                click_thread.start()
+                self.assertFalse(clicked.wait(0.1))
+                engine._execute_action_once(Combo(action=Action(action_type=ActionType.KEY_PRESS, key="space")))
+                key.assert_called_once()
+                release.set()
+                self.assertTrue(clicked.wait(1))
+            finally:
+                stopped.set()
+                engine._stop_event.set()
+                position_thread.join(1)
+                click_thread.join(1)
+            up.assert_called_once_with("left")
+        self.assertFalse(position_thread.is_alive())
+        self.assertFalse(click_thread.is_alive())
+        self.assertFalse(engine._mouse_locks["left"].locked())
+
+        engine._stop_event.clear()
+        lock = engine._mouse_locks["left"]
+        lock.acquire()
+        waiting = threading.Thread(target=engine._execute_action_once, args=(click_combo,))
+        with patch.object(input_controller, "mouse_click") as click:
+            try:
+                waiting.start()
+                engine._stop_event.set()
+                waiting.join(1)
+                self.assertFalse(waiting.is_alive())
+                click.assert_not_called()
+            finally:
+                lock.release()
 
     def test_position_only_profile_starts_and_stops(self):
         pressed = threading.Event()

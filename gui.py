@@ -1006,11 +1006,13 @@ class ComboEditor:
         self.var_position_color = tk.StringVar(value="#%02x%02x%02x" % settings.color)
         self.var_position_tolerance = tk.StringVar(value=str(settings.tolerance))
         self.var_position_area = tk.StringVar(value=str(settings.min_area))
+        self.var_position_max_area = tk.StringVar(value=str(settings.max_area))
         self.var_position_press = tk.StringVar(value=f"{settings.press_at * 100:g}")
         self.var_position_release = tk.StringVar(value=f"{settings.release_at * 100:g}")
         for label, var in (("標記顏色 (#RRGGBB)", self.var_position_color),
                            ("顏色容差 (0~90)", self.var_position_tolerance),
                            ("最小面積 (像素)", self.var_position_area),
+                           ("最大面積 (0=不限)", self.var_position_max_area),
                            ("按住位置 (%)", self.var_position_press),
                            ("放開位置 (%)", self.var_position_release)):
             row = tk.Frame(self.frm_position)
@@ -1048,6 +1050,7 @@ class ComboEditor:
             color=tuple(int(value[i:i + 2], 16) for i in (1, 3, 5)),
             tolerance=int(self.var_position_tolerance.get()),
             min_area=int(self.var_position_area.get()),
+            max_area=int(self.var_position_max_area.get()),
             press_at=self._to_float(self.var_position_press.get()) / 100,
             release_at=self._to_float(self.var_position_release.get()) / 100)
         settings.validate()

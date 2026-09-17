@@ -105,6 +105,7 @@ class PositionControl:
     min_area: int = 20
     press_at: float = 0.45
     release_at: float = 0.75
+    max_area: int = 0  # 0 = 不限制；模板模式以原圖像素面積設定
 
     def validate(self):
         if self.region_space not in ("screen", "template"):
@@ -120,12 +121,15 @@ class PositionControl:
             raise ValueError("顏色容差必須介於 0~90。")
         if type(self.min_area) is not int or self.min_area < 1:
             raise ValueError("最小面積必須是正整數。")
+        if (type(self.max_area) is not int or self.max_area < 0
+                or 0 < self.max_area < self.min_area):
+            raise ValueError("最大面積必須是 0（不限制），或不小於最小面積的整數。")
         if not 0 <= self.press_at < self.release_at <= 1:
             raise ValueError("界線必須符合：0 ≤ 按住位置 < 放開位置 ≤ 100%。")
 
     def to_dict(self) -> dict:
         return {"region_space": self.region_space, "region": self.region, "color": self.color,
-                "tolerance": self.tolerance, "min_area": self.min_area,
+                "tolerance": self.tolerance, "min_area": self.min_area, "max_area": self.max_area,
                 "press_at": self.press_at, "release_at": self.release_at}
 
     @classmethod
@@ -134,7 +138,8 @@ class PositionControl:
                    region=tuple(d["region"]) if d.get("region") else None,
                    color=tuple(d.get("color", (255, 185, 50))),
                    tolerance=d.get("tolerance", 15), min_area=d.get("min_area", 20),
-                   press_at=d.get("press_at", 0.45), release_at=d.get("release_at", 0.75))
+                   press_at=d.get("press_at", 0.45), release_at=d.get("release_at", 0.75),
+                   max_area=d.get("max_area", 0))
 
 
 # ── Combo ─────────────────────────────────────────────────
