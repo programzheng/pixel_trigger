@@ -41,7 +41,8 @@ def mouse_rapid_click(
         if stop_event and stop_event.is_set():
             break
         pyautogui.click(button=button)
-        time.sleep(random.uniform(interval_min, interval_max))
+        if not _interruptible_sleep(random.uniform(interval_min, interval_max), stop_event):
+            break
 
 
 def mouse_hold(
@@ -52,11 +53,11 @@ def mouse_hold(
     """長按滑鼠鍵"""
     if stop_event and stop_event.is_set():
         return
-    pyautogui.mouseDown(button=button)
     try:
+        pyautogui.mouseDown(button=button)
         _interruptible_sleep(duration, stop_event)
     finally:
-        pyautogui.mouseUp(button=button)
+        release_mouse(button)
 
 
 # ── 鍵盤操作 ─────────────────────────────────────────────
@@ -84,7 +85,8 @@ def key_rapid_press(
         if stop_event and stop_event.is_set():
             break
         pyautogui.press(key)
-        time.sleep(random.uniform(interval_min, interval_max))
+        if not _interruptible_sleep(random.uniform(interval_min, interval_max), stop_event):
+            break
 
 
 def key_hold(key: str, duration: float = 1.0, stop_event=None):

@@ -10,6 +10,28 @@ from models import Action, ActionType, Combo, Profile, TriggerMode
 
 
 class ResponsiveAutomationTest(unittest.TestCase):
+    def test_marker_modes_support_every_action_and_cancel(self):
+        for trigger in (TriggerMode.POSITION_CONTROL, TriggerMode.COLOR_BAND):
+            for action_type, method in ((ActionType.CLICK, "mouse_click"),
+                                      (ActionType.RAPID_CLICK, "mouse_rapid_click"),
+                                      (ActionType.HOLD_MOUSE, "mouse_hold"),
+                                      (ActionType.KEY_PRESS, "key_press"),
+                                      (ActionType.RAPID_KEY, "key_rapid_press"),
+                                      (ActionType.HOLD_KEY, "key_hold"),
+                                      (ActionType.CLICK_IMAGE, "_click_target_image")):
+                with self.subTest(trigger=trigger, action=action_type):
+                    engine = HookEngine()
+                    combo = Combo(trigger=trigger, action=Action(action_type=action_type,
+                                  delay_min=0, delay_max=0))
+                    stopped = threading.Event()
+                    target = engine if action_type == ActionType.CLICK_IMAGE else input_controller
+                    with patch.object(target, method, side_effect=lambda *args: stopped.set()) as run:
+                        engine._controlled_action_loop(combo, stopped)
+                        run.assert_called_once()
+                        self.assertIs(run.call_args.args[-1], stopped)
+                        engine._controlled_action_loop(combo, stopped)
+                        run.assert_called_once()
+
     def test_click_image_matches_target_and_cancels_without_clicking(self):
         combo = Combo(image_path="trigger.png", action=Action(
             action_type=ActionType.CLICK_IMAGE, target_image_path="target.png",
@@ -90,7 +112,8 @@ class ResponsiveAutomationTest(unittest.TestCase):
         for action, down, up in ((input_controller.mouse_hold, "mouseDown", "mouseUp"),
                                  (input_controller.key_hold, "keyDown", "keyUp")):
             with patch.object(input_controller.pyautogui, down), \
-                    patch.object(input_controller.pyautogui, up) as released, \
+                    patch.object(input_controller if up == "mouseUp" else input_controller.pyautogui,
+                                 "release_mouse" if up == "mouseUp" else up) as released, \
                     patch.object(input_controller, "_interruptible_sleep", side_effect=RuntimeError), \
                     self.assertRaises(RuntimeError):
                 action("left" if down == "mouseDown" else "space")

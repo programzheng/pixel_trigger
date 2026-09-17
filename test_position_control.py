@@ -229,7 +229,7 @@ class PositionControlTest(unittest.TestCase):
                     editor._preview_position()
                     results.append(editor.lbl_position_status.cget("text"))
                     self.assertEqual(editor.frm_position.winfo_manager(), "pack")
-                    self.assertEqual(editor.frm_duration.winfo_manager(), "")
+                    self.assertEqual(editor.frm_duration.winfo_manager(), "pack")
                     editor._ok()
                 finally:
                     if editor.win.winfo_exists():

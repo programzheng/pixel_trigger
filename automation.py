@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +12,7 @@ from datetime import datetime
 
 import input_controller
 from models import ActionType, Combo, Profile, TriggerMode
-from screen_capture import ScreenCapture, find_color_marker
+from screen_capture import ScreenCapture, find_color_marker, color_band_state
 from window_target import get_window_region, list_windows
 
 
@@ -77,7 +78,7 @@ class HookEngine:
                 if not self._capture.load_template(action.target_image_path):
                     raise ValueError("請指定有效的點擊目標圖片。")
         positions = [c for c in self._profile.combos
-                     if c.enabled and c.trigger == TriggerMode.POSITION_CONTROL]
+                     if c.enabled and c.trigger.tracks_marker]
         for combo in positions:
             combo.position_control.validate()
             if combo.position_control.region_space == "template":
@@ -87,8 +88,15 @@ class HookEngine:
                 x, y, w, h = combo.position_control.region
                 if x < 0 or y < 0 or x + w > tw or y + h > th:
                     raise ValueError("箭頭追蹤區域必須在觸發圖片內。")
-            if combo.action.action_type != ActionType.HOLD_MOUSE:
-                raise ValueError("位置控制需使用滑鼠長按。")
+            action = combo.action
+            if (any(not math.isfinite(v) or v < 0 for v in
+                    (action.delay_min, action.delay_max, action.duration,
+                     action.interval_min, action.interval_max))
+                    or action.delay_min > action.delay_max or action.interval_min > action.interval_max):
+                raise ValueError("動作時間必須是非負數，且最小值不能大於最大值。")
+            if action.action_type in (ActionType.KEY_PRESS, ActionType.RAPID_KEY, ActionType.HOLD_KEY):
+                if action.key not in input_controller.pyautogui.KEYBOARD_KEYS:
+                    raise ValueError("請指定有效的鍵盤按鍵。")
         self._running = True
         self._stop_event.clear()
         self.cycle_count = 0
@@ -121,7 +129,7 @@ class HookEngine:
         workers = {}
         try:
             for combo in self._profile.combos:
-                if combo.enabled and combo.trigger == TriggerMode.POSITION_CONTROL:
+                if combo.enabled and combo.trigger.tracks_marker:
                     self._start_continuous_action(combo)
             with ThreadPoolExecutor(max_workers=max(1, len(self._profile.combos))) as pool:
                 try:
@@ -149,7 +157,7 @@ class HookEngine:
 
             enabled_combos = [
                 c for c in profile.combos
-                if c.enabled and c.trigger != TriggerMode.POSITION_CONTROL
+                if c.enabled and not c.trigger.tracks_marker
                 and (c.image_path or c.verify_text)
             ]
 
@@ -314,32 +322,33 @@ class HookEngine:
         finally:
             lock.release()
 
-    def _execute_action_once_unlocked(self, combo: Combo):
+    def _execute_action_once_unlocked(self, combo: Combo, stop_event=None):
+        stop_event = self._stop_event if stop_event is None else stop_event
         action = combo.action
         at = action.action_type
         print(f"[{datetime.now():%Y%m%d %H:%M:%S}][action] '{combo.name}' → {at.value}")
 
         if at == ActionType.CLICK:
             input_controller.mouse_click(
-                action.mouse_button.value, action.delay_min, action.delay_max, self._stop_event
+                action.mouse_button.value, action.delay_min, action.delay_max, stop_event
             )
         elif at == ActionType.CLICK_IMAGE:
-            self._click_target_image(combo, self._stop_event)
+            self._click_target_image(combo, stop_event)
         elif at == ActionType.RAPID_CLICK:
             input_controller.mouse_rapid_click(
                 action.mouse_button.value,
                 action.duration,
                 action.interval_min,
                 action.interval_max,
-                self._stop_event,
+                stop_event,
             )
         elif at == ActionType.HOLD_MOUSE:
             input_controller.mouse_hold(
-                action.mouse_button.value, action.duration, self._stop_event
+                action.mouse_button.value, action.duration, stop_event
             )
         elif at == ActionType.KEY_PRESS:
             input_controller.key_press(
-                action.key, action.delay_min, action.delay_max, self._stop_event
+                action.key, action.delay_min, action.delay_max, stop_event
             )
         elif at == ActionType.RAPID_KEY:
             input_controller.key_rapid_press(
@@ -347,11 +356,11 @@ class HookEngine:
                 action.duration,
                 action.interval_min,
                 action.interval_max,
-                self._stop_event,
+                stop_event,
             )
         elif at == ActionType.HOLD_KEY:
             input_controller.key_hold(
-                action.key, action.duration, self._stop_event
+                action.key, action.duration, stop_event
             )
 
     def _click_target_image(self, combo: Combo, stop_event: threading.Event):
@@ -384,7 +393,7 @@ class HookEngine:
             daemon=True,
         )
         self._active_actions[combo.id] = t
-        self._notify_triggered(combo.id, combo.trigger != TriggerMode.POSITION_CONTROL)
+        self._notify_triggered(combo.id, not combo.trigger.tracks_marker)
         print(f"[{datetime.now():%Y%m%d %H:%M:%S}][action] '{combo.name}' → {combo.action.action_type.value} 持續中...")
         t.start()
 
@@ -392,7 +401,7 @@ class HookEngine:
         try:
             self._continuous_action_loop(combo, stop_event)
         except Exception:
-            if combo.trigger == TriggerMode.POSITION_CONTROL:
+            if combo.trigger.tracks_marker:
                 self._stop_event.set()
             raise
         finally:
@@ -416,7 +425,7 @@ class HookEngine:
         action = combo.action
         at = action.action_type
 
-        if combo.trigger == TriggerMode.POSITION_CONTROL:
+        if combo.trigger.tracks_marker:
             self._position_control_loop(combo, stop_event)
             return
 
@@ -493,9 +502,9 @@ class HookEngine:
 
     def _position_control_loop(self, combo: Combo, stop_event: threading.Event):
         settings = combo.position_control
-        button = combo.action.mouse_button.value
-        lock = self._mouse_locks[button]
-        held = False
+        active = False
+        action_stop = threading.Event()
+        action_thread = None
         try:
             while not stop_event.is_set() and not self._stop_event.is_set():
                 if not combo.enabled or combo not in self._profile.combos:
@@ -507,40 +516,65 @@ class HookEngine:
                     combo, self._stop_event, scan_region=region)
                 marker = find_color_marker(frame, settings)
                 position = marker[0][0] / max(1, frame.shape[1] - 1) if marker else None
-                should_hold = held
-                if position is None or position >= settings.release_at:
-                    should_hold = False
+                should_run = active
+                if combo.trigger == TriggerMode.COLOR_BAND:
+                    should_run, _ = color_band_state(frame, marker, settings, active)
+                elif position is None or position >= settings.release_at:
+                    should_run = False
                 elif position <= settings.press_at:
-                    should_hold = True
+                    should_run = True
                 if self._stop_event.is_set() or stop_event.is_set():
                     break
-                if should_hold != held:
-                    if should_hold:
-                        if lock.acquire(blocking=False):
-                            held = True
-                            input_controller.pyautogui.mouseDown(button=button)
+                if should_run != active:
+                    if should_run:
+                        # 前一輪動作必須結束後才開下一輪；慢圖片比對不能重疊送出輸入。
+                        if action_thread is None or not action_thread.is_alive():
+                            action_stop = threading.Event()
+                            action_thread = threading.Thread(target=self._controlled_action_loop,
+                                                             args=(combo, action_stop), daemon=True)
+                            action_thread.start()
+                            active = True
                     else:
-                        try:
-                            input_controller.release_mouse(button)
-                        finally:
-                            held = False
-                            lock.release()
-                    self._notify_triggered(combo.id, held)
+                        action_stop.set()
+                        active = False
                 if self._on_debug_info:
                     rect = None
                     if marker:
                         x, y, w, h = marker[1]
                         rect = (screen_region[0] + x, screen_region[1] + y, w, h)
-                    self._on_debug_info(combo.id, marker is not None,
+                    self._on_debug_info(combo.id, should_run if combo.trigger == TriggerMode.COLOR_BAND else marker is not None,
                                         self._capture.get_position_confidence(), rect)
                 self._interruptible_sleep_event(0.04, stop_event)
         finally:
-            if held:
-                try:
-                    input_controller.release_mouse(button)
-                finally:
-                    lock.release()
+            action_stop.set()
+            if action_thread:
+                action_thread.join()
             self._notify_triggered(combo.id, False)
+
+    def _controlled_action_loop(self, combo: Combo, stop_event: threading.Event):
+        """條件成立期間依一般動作參數執行；單擊類每次成立只執行一次。"""
+        action = combo.action
+        single = action.action_type in (ActionType.CLICK, ActionType.CLICK_IMAGE, ActionType.KEY_PRESS)
+        try:
+            while not stop_event.is_set() and not self._stop_event.is_set():
+                # 單擊與點圖本身有延遲；其他動作在此套用相同設定。
+                if not single and stop_event.wait(random.uniform(action.delay_min, action.delay_max)):
+                    break
+                with self._mouse_action(combo, stop_event) as acquired:
+                    if not acquired or self._stop_event.is_set():
+                        break
+                    self._notify_triggered(combo.id, True)
+                    try:
+                        self._execute_action_once_unlocked(combo, stop_event)
+                    finally:
+                        self._notify_triggered(combo.id, False)
+                if single:
+                    break
+                if stop_event.wait(max(0.02, random.uniform(action.interval_min, action.interval_max))):
+                    break
+        except Exception:
+            self._stop_event.set()
+            raise
 
     def _wait_until_stopped(self, stop_event: threading.Event):
         while not stop_event.is_set() and not self._stop_event.is_set():
