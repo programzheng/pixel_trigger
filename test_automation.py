@@ -6,10 +6,43 @@ import numpy as np
 
 import input_controller
 from automation import HookEngine
-from models import Combo, Profile
+from models import Action, ActionType, Combo, Profile, TriggerMode
 
 
 class ResponsiveAutomationTest(unittest.TestCase):
+    def test_click_image_matches_target_and_cancels_without_clicking(self):
+        combo = Combo(image_path="trigger.png", action=Action(
+            action_type=ActionType.CLICK_IMAGE, target_image_path="target.png",
+            target_threshold=0.9))
+        profile = Profile(combos=[combo], scan_region=(100, 200, 400, 300))
+        restored = Profile.from_dict(profile.to_dict())
+        self.assertEqual(restored.combos[0].action, combo.action)
+        self.assertEqual(Action.from_dict({}).target_image_path, "")
+        engine = HookEngine()
+        engine.set_profile(profile)
+        stopped = threading.Event()
+        frame = np.zeros((300, 400))
+        with patch.object(engine._capture, "grab_frame", return_value=frame), \
+                patch.object(engine._capture, "match_template", return_value=(True, 0.95, (250, 350))) as match, \
+                patch.object(input_controller.pyautogui, "click") as click:
+            engine._execute_action_once(combo)
+            click.assert_called_once_with(x=250, y=350, button="left")
+            self.assertEqual(match.call_args.args[1:4], ("target.png", 0.9, profile.scan_region))
+            click.reset_mock()
+            match.return_value = (False, 0.2, (250, 350))
+            engine._click_target_image(combo, stopped)
+            click.assert_not_called()
+            match.return_value = (True, 0.95, (250, 350))
+            match.side_effect = lambda *args, **kwargs: (stopped.set() or (True, 0.95, (250, 350)))
+            engine._click_target_image(combo, stopped)
+            click.assert_not_called()
+            stopped.clear()
+            match.side_effect = None
+            combo.trigger = TriggerMode.WHILE_VISIBLE
+            with patch.object(engine, "_click_target_image", side_effect=lambda *args: stopped.set()) as target:
+                engine._continuous_action_loop(combo, stopped)
+                target.assert_called_once_with(combo, stopped)
+
     def test_slow_combo_does_not_block_fast_combo_or_duplicate_work(self):
         slow = Combo(image_path="slow.png")
         fast = Combo(image_path="fast.png")

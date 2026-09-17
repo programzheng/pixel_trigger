@@ -25,6 +25,7 @@ class TextMatchMode(str, Enum):
 class ActionType(str, Enum):
     # 滑鼠
     CLICK = "click"                    # 單擊
+    CLICK_IMAGE = "click_image"        # 尋找並點擊另一張圖片
     RAPID_CLICK = "rapid_click"        # 連續快速點擊
     HOLD_MOUSE = "hold_mouse"          # 長按滑鼠鍵
     # 鍵盤
@@ -62,6 +63,9 @@ class Action:
     interval_min: float = 0.05
     interval_max: float = 0.15
 
+    target_image_path: str = ""
+    target_threshold: float = 0.8
+
     def to_dict(self) -> dict:
         return {
             "action_type": self.action_type.value,
@@ -72,6 +76,8 @@ class Action:
             "duration": self.duration,
             "interval_min": self.interval_min,
             "interval_max": self.interval_max,
+            "target_image_path": self.target_image_path,
+            "target_threshold": self.target_threshold,
         }
 
     @classmethod
@@ -85,6 +91,8 @@ class Action:
             duration=d.get("duration", 1.0),
             interval_min=d.get("interval_min", 0.05),
             interval_max=d.get("interval_max", 0.15),
+            target_image_path=d.get("target_image_path", ""),
+            target_threshold=d.get("target_threshold", 0.8),
         )
 
 

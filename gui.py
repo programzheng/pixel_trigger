@@ -40,6 +40,7 @@ TRIGGER_LABELS = {
 
 ACTION_LABELS = {
     ActionType.CLICK: "滑鼠 單擊",
+    ActionType.CLICK_IMAGE: "滑鼠 點擊圖片",
     ActionType.RAPID_CLICK: "滑鼠 連續點擊",
     ActionType.HOLD_MOUSE: "滑鼠 長按",
     ActionType.KEY_PRESS: "鍵盤 按一下",
@@ -394,7 +395,7 @@ class App:
 
     def _action_summary(self, action: Action) -> str:
         label = ACTION_LABELS.get(action.action_type, "?")
-        if action.action_type in (ActionType.CLICK, ActionType.RAPID_CLICK, ActionType.HOLD_MOUSE):
+        if action.action_type in (ActionType.CLICK, ActionType.CLICK_IMAGE, ActionType.RAPID_CLICK, ActionType.HOLD_MOUSE):
             btn = MOUSE_BTN_LABELS.get(action.mouse_button, "?")
             return f"{label} ({btn})"
         else:
@@ -663,6 +664,7 @@ class ComboEditor:
         tk.Entry(frm_img, textvariable=self.var_image, width=22).pack(side="left", padx=5, fill="x", expand=True)
         tk.Button(frm_img, text="瀏覽", command=self._browse_image).pack(side="left", padx=2)
         tk.Button(frm_img, text="貼上", command=self._paste_image).pack(side="left", padx=2)
+        tk.Button(frm_img, text="框選", command=self._capture_image).pack(side="left", padx=2)
 
         # 圖片預覽（文字 + 去背按鈕 + 縮圖）
         frm_preview = tk.Frame(sf)
@@ -771,6 +773,22 @@ class ComboEditor:
         self.frm_params = tk.LabelFrame(sf, text="動作參數", padx=10, pady=5)
         self.frm_params.pack(fill="x", padx=10, pady=5)
         self._build_position_ui(sf)
+
+        self.frm_target = tk.LabelFrame(self.frm_params, text="點擊目標圖片")
+        self.var_target_image = tk.StringVar(value=combo.action.target_image_path)
+        tk.Entry(self.frm_target, textvariable=self.var_target_image).pack(fill="x", padx=3, pady=3)
+        target_buttons = tk.Frame(self.frm_target)
+        target_buttons.pack(fill="x")
+        tk.Button(target_buttons, text="瀏覽", command=lambda: self._browse_image(target=True)).pack(side="left")
+        tk.Button(target_buttons, text="框選", command=lambda: self._capture_image(target=True)).pack(side="left")
+        tk.Label(target_buttons, text="閾值:").pack(side="left", padx=3)
+        self.var_target_threshold = tk.StringVar(value=str(combo.action.target_threshold))
+        tk.Entry(target_buttons, textvariable=self.var_target_threshold, width=5).pack(side="left")
+        self.lbl_target_thumb = tk.Label(self.frm_target)
+        self.lbl_target_thumb.pack(anchor="w")
+        tk.Label(self.frm_target, text="找到目標後點擊中心；找不到就不點擊。", fg="#666666").pack(anchor="w")
+        if combo.action.target_image_path:
+            self._update_target_preview(combo.action.target_image_path)
 
         # 滑鼠按鍵
         self.frm_mouse_btn = tk.Frame(self.frm_params)
@@ -882,15 +900,57 @@ class ComboEditor:
                 text=f"{Path(path).name} ({w}x{h})", fg="#333333",
             )
 
-    def _browse_image(self):
+    def _update_target_preview(self, path: str):
+        try:
+            with Image.open(path) as source:
+                img = source.copy()
+            img.thumbnail((300, 100))
+            self._target_photo = ImageTk.PhotoImage(img)
+            self.lbl_target_thumb.config(image=self._target_photo, text="")
+        except Exception:
+            self.lbl_target_thumb.config(image="", text="無法讀取目標圖片")
+
+    def _capture_image(self, target: bool = False):
+        root = self.win.master
+        root_state = root.state()
+        try:
+            self.win.withdraw()
+            root.withdraw()
+            root.update()
+            time.sleep(0.2)
+            screenshot = ImageGrab.grab()
+            selector = RegionSelector(root)
+            if selector.result:
+                x, y, w, h = selector.result
+                profile_manager.ensure_dirs()
+                path = profile_manager.TEMPLATES_DIR / f"template_{time.time_ns()}.png"
+                screenshot.crop((x, y, x + w, y + h)).save(path, "PNG")
+                if target:
+                    self.var_target_image.set(str(path))
+                    self._update_target_preview(str(path))
+                else:
+                    self.var_image.set(str(path))
+                    self._update_preview(str(path))
+        except Exception as e:
+            messagebox.showerror("錯誤", f"擷取圖片失敗:\n{e}", parent=self.win)
+        finally:
+            root.state(root_state)
+            self.win.deiconify()
+            self.win.grab_set()
+
+    def _browse_image(self, target: bool = False):
         path = filedialog.askopenfilename(
-            title="選擇觸發圖片",
+            title="選擇點擊目標圖片" if target else "選擇觸發圖片",
             initialdir=str(profile_manager.TEMPLATES_DIR),
             filetypes=[("圖片", "*.png *.jpg *.bmp"), ("所有檔案", "*.*")],
         )
         if path:
-            self.var_image.set(path)
-            self._update_preview(path, auto_ocr=True)
+            if target:
+                self.var_target_image.set(path)
+                self._update_target_preview(path)
+            else:
+                self.var_image.set(path)
+                self._update_preview(path, auto_ocr=True)
 
     def _paste_image(self):
         """從剪貼簿貼上圖片，自動存到 templates/ 目錄"""
@@ -1115,7 +1175,7 @@ class ComboEditor:
             self.var_position_preview.set(False)
         at = self.var_action_type.get()
 
-        is_mouse = at in ("click", "rapid_click", "hold_mouse")
+        is_mouse = at in ("click", "click_image", "rapid_click", "hold_mouse")
         is_key = at in ("key_press", "rapid_key", "hold_key")
         is_rapid = at in ("rapid_click", "rapid_key")
         is_hold = at in ("hold_mouse", "hold_key")
@@ -1127,11 +1187,13 @@ class ComboEditor:
 
         # 先全部隱藏再按需顯示
         for w in (self.frm_mouse_btn, self.frm_key, self.frm_delay,
-                  self.frm_duration, self.frm_interval):
+                  self.frm_duration, self.frm_interval, self.frm_target):
             w.pack_forget()
 
         if is_mouse:
             self.frm_mouse_btn.pack(fill="x", pady=2)
+        if at == "click_image":
+            self.frm_target.pack(fill="x", pady=2)
         if is_key:
             self.frm_key.pack(fill="x", pady=2)
         if not position_mode:
@@ -1177,6 +1239,20 @@ class ComboEditor:
             delay_min = self._to_float(self.var_delay_min.get())
             delay_max = self._to_float(self.var_delay_max.get())
 
+            target_image_path = self.var_target_image.get().strip()
+            target_threshold = self.combo.action.target_threshold
+            if action_type == ActionType.CLICK_IMAGE:
+                target_threshold = self._to_float(self.var_target_threshold.get(), 0.8)
+                if not 0 <= target_threshold <= 1:
+                    raise ValueError("點擊目標的圖片閾值必須介於 0~1。")
+                if not 0 <= delay_min <= delay_max:
+                    raise ValueError("延遲必須符合：0 ≤ 最小延遲 ≤ 最大延遲。")
+                try:
+                    with Image.open(target_image_path) as img:
+                        img.load()
+                except Exception:
+                    raise ValueError("請上傳或框選有效的點擊目標圖片。") from None
+
             # 只在欄位可見時才解析，否則保留原值
             duration = (self._to_float(self.var_duration.get(), 1.0)
                         if need_duration else self.combo.action.duration)
@@ -1205,6 +1281,8 @@ class ComboEditor:
             action.duration = duration
             action.interval_min = interval_min
             action.interval_max = interval_max
+            action.target_image_path = target_image_path
+            action.target_threshold = target_threshold
 
             self.result = True
             self.win.destroy()
