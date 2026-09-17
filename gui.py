@@ -992,7 +992,7 @@ class ComboEditor:
     def _build_position_ui(self, parent):
         settings = self.combo.position_control
         self.frm_position = tk.LabelFrame(parent, text="位置控制設定", padx=8, pady=5)
-        tk.Label(self.frm_position, text="直接框選觸發圖片內的路徑，排除固定同色區塊。",
+        tk.Label(self.frm_position, text="完整觸發圖片用於定位；框選區域只用來追蹤箭頭。",
                  wraplength=340, justify="left").pack(anchor="w")
         row = tk.Frame(self.frm_position)
         row.pack(fill="x")
@@ -1060,8 +1060,8 @@ class ComboEditor:
         except (OSError, ValueError):
             raise ValueError("請先指定有效的觸發圖片。") from None
         x, y, w, h = settings.region
-        if x < 0 or y < 0 or x + w > tw or y + h > th or w * h == tw * th:
-            raise ValueError("請在觸發圖片內框選局部區域，保留部分圖片供定位使用。")
+        if x < 0 or y < 0 or x + w > tw or y + h > th:
+            raise ValueError("箭頭追蹤區域必須在觸發圖片內。")
         return settings
 
     def _select_position_region(self):
@@ -1160,10 +1160,9 @@ class ComboEditor:
         for widget, options in self.image_pack.items():
             if not position_mode or widget in self.position_image_widgets:
                 widget.pack(**{**options, "before": self.lbl_trigger})
-        if not position_mode:
-            if self.var_image.get().strip():
-                self._update_preview(self.var_image.get().strip())
-                self.lbl_thumb.pack(before=self.lbl_trigger, anchor="w", padx=10, pady=2)
+        if self.var_image.get().strip():
+            self._update_preview(self.var_image.get().strip())
+            self.lbl_thumb.pack(before=self.lbl_trigger, anchor="w", padx=10, pady=2)
         self.frm_position.pack_forget()
         self.lbl_action.pack_forget()
         self.frm_action_types.pack_forget()
@@ -1388,7 +1387,7 @@ class ImageRegionSelector(RegionSelector):
         self.overlay.transient(parent)
         self.overlay.attributes("-topmost", True)
         self.overlay.resizable(False, False)
-        tk.Label(self.overlay, text="拖曳框選箭頭移動路徑；保留部分圖片供定位使用。ESC 取消。",
+        tk.Label(self.overlay, text="拖曳框選箭頭移動路徑；完整圖片仍用於定位。ESC 取消。",
                  wraplength=max(200, self._display_size[0])).pack(padx=10, pady=8)
         self._photo = ImageTk.PhotoImage(image.resize(self._display_size))
         self.canvas = tk.Canvas(self.overlay, width=self._display_size[0],

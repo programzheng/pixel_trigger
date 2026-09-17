@@ -249,16 +249,41 @@ class PositionControlTest(unittest.TestCase):
                 patch.object(capture, "get_match_size", return_value=(260, 160)), \
                 patch.object(capture, "get_template_size", return_value=(130, 80)):
             frame, region = capture.position_frame(self.combo)
+            self.assertEqual(capture.get_position_confidence(), 1.0)
             self.assertEqual(region, (50, 70, 202, 80))
             self.assertEqual(frame.shape, (80, 202, 3))
             self.assertAlmostEqual(find_color_marker(frame, self.settings)[0][0], 60.5)
-            self.assertEqual(match.call_args.kwargs["exclude_region"], self.settings.region)
             frame, region = capture.position_frame(self.combo, scan_region=(-400, 200, 400, 240))
             self.assertEqual(region, (-350, 270, 202, 80))
             self.assertEqual(frame.shape, (80, 202, 3))
         with patch.object(capture, "grab_frame", return_value=screen), \
                 patch.object(capture, "match_template", return_value=(False, 0.2, None)):
             self.assertEqual(capture.position_frame(self.combo), (None, None))
+            self.assertEqual(capture.get_position_confidence(), 0.2)
+
+    def test_position_debug_reports_locator_score_when_marker_is_missing(self):
+        engine = HookEngine()
+        engine.set_profile(Profile(combos=[self.combo]))
+        settings = self.settings
+        settings.region_space = "template"
+        self.combo.image_path = "trigger.png"
+        self.combo.match_threshold = 0.8
+        frame = np.zeros((80, 130, 3), dtype=np.uint8)
+        stopped = threading.Event()
+        results = []
+        engine._on_debug_info = lambda *args: results.append(args)
+        with patch.object(engine._capture, "grab_frame", return_value=frame), \
+                patch.object(engine._capture, "match_template",
+                             side_effect=[(False, 0.37, None), (True, 0.91, (65, 40))]), \
+                patch.object(engine._capture, "get_match_size", return_value=(130, 80)), \
+                patch.object(engine._capture, "get_template_size", return_value=(130, 80)), \
+                patch.object(engine, "_interruptible_sleep_event",
+                             side_effect=lambda *args: stopped.set() if len(results) == 2 else None), \
+                patch.object(input_controller.pyautogui, "mouseDown") as down:
+            engine._position_control_loop(self.combo, stopped)
+        self.assertEqual(results, [(self.combo.id, False, 0.37, None),
+                                   (self.combo.id, False, 0.91, None)])
+        down.assert_not_called()
 
     def test_image_selector_drag_maps_to_original_pixels(self):
         selector = ImageRegionSelector.__new__(ImageRegionSelector)
@@ -270,7 +295,7 @@ class PositionControlTest(unittest.TestCase):
         self.assertEqual(selector.result, (100, 50, 500, 350))
         selector.overlay.destroy.assert_called_once()
 
-    def test_locator_ignores_dynamic_region(self):
+    def test_locator_matches_full_template_and_only_crops_tracking_region(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         path = str(Path(directory.name) / "trigger.png")
@@ -278,13 +303,24 @@ class PositionControlTest(unittest.TestCase):
         cv2.imwrite(path, template)
         screen = np.zeros((140, 200), dtype=np.uint8)
         screen[20:100, 40:170] = template
-        screen[40:80, 50:151] = 255
         capture = ScreenCapture()
-        found, score, center = capture.match_template(
-            screen, path, 0.99, exclude_region=(10, 20, 101, 40), scale_limit=0)
-        self.assertTrue(found)
-        self.assertEqual(center, (105, 60))
-        self.assertGreaterEqual(score, 0.99)
+        self.combo.image_path = path
+        self.combo.match_threshold = 0.99
+        self.settings.region_space = "template"
+        with patch.object(capture, "grab_frame", side_effect=lambda *a, **kw:
+                          cv2.cvtColor(screen, cv2.COLOR_GRAY2RGB)):
+            frame, region = capture.position_frame(self.combo)
+            self.assertEqual(region, (50, 40, 101, 40))
+            np.testing.assert_array_equal(frame[:, :, 0], template[20:60, 10:111])
+            self.assertGreaterEqual(capture.get_position_confidence(), 0.99)
+            screen[40:80, 50:151] = 255
+            self.assertEqual(capture.position_frame(self.combo), (None, None))
+            self.assertLess(capture.get_position_confidence(), 0.99)
+            screen[20:100, 40:170] = template
+            self.settings.region = (0, 0, 130, 80)
+            frame, region = capture.position_frame(self.combo)
+            self.assertEqual(region, (40, 20, 130, 80))
+            np.testing.assert_array_equal(frame[:, :, 0], template)
 
 
 if __name__ == "__main__":

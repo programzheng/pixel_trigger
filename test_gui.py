@@ -7,10 +7,41 @@ import tkinter as tk
 from PIL import Image
 
 from gui import App, ComboEditor
-from models import Action, ActionType, Combo, Profile
+from models import Action, ActionType, Combo, PositionControl, Profile, TriggerMode
 
 
 class ComboScaleDisplayTest(unittest.TestCase):
+    def test_position_editor_keeps_image_preview_after_save_and_reopen(self):
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "gauge.png"
+                Image.new("RGB", (50, 40), "red").save(path)
+                combo = Combo(image_path=str(path), trigger=TriggerMode.POSITION_CONTROL,
+                              action=Action(action_type=ActionType.HOLD_MOUSE),
+                              position_control=PositionControl(region=(0, 0, 50, 40)))
+                with patch.object(tk.Toplevel, "wait_window"):
+                    editor = ComboEditor(root, combo)
+                    self.assertEqual(editor.lbl_thumb.winfo_manager(), "pack")
+                    editor._ok()
+                    self.assertTrue(editor.result)
+                    restored = Combo.from_dict(combo.to_dict())
+                    reopened = ComboEditor(root, restored)
+                try:
+                    self.assertEqual(reopened.var_image.get(), str(path))
+                    self.assertEqual(reopened.lbl_thumb.winfo_manager(), "pack")
+                    self.assertTrue(reopened.lbl_thumb.cget("image"))
+                    self.assertEqual(reopened._position_frame.shape, (40, 50, 3))
+                    for mode in (TriggerMode.ON_APPEAR, TriggerMode.POSITION_CONTROL):
+                        reopened.var_trigger.set(mode.value)
+                        reopened._on_action_type_change()
+                        self.assertEqual(reopened.lbl_thumb.winfo_manager(), "pack")
+                finally:
+                    reopened.win.destroy()
+        finally:
+            root.destroy()
+
     def test_image_click_editor_upload_capture_and_save(self):
         root = tk.Tk()
         root.withdraw()

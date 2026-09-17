@@ -85,8 +85,8 @@ class HookEngine:
                     raise ValueError("位置控制請先指定有效的觸發圖片。")
                 tw, th = self._capture.get_template_size(combo.image_path)
                 x, y, w, h = combo.position_control.region
-                if x < 0 or y < 0 or x + w > tw or y + h > th or w * h == tw * th:
-                    raise ValueError("請在觸發圖片內框選局部區域，保留部分圖片供定位使用。")
+                if x < 0 or y < 0 or x + w > tw or y + h > th:
+                    raise ValueError("箭頭追蹤區域必須在觸發圖片內。")
             if combo.action.action_type != ActionType.HOLD_MOUSE:
                 raise ValueError("位置控制需使用滑鼠長按。")
         self._running = True
@@ -532,7 +532,7 @@ class HookEngine:
                         x, y, w, h = marker[1]
                         rect = (screen_region[0] + x, screen_region[1] + y, w, h)
                     self._on_debug_info(combo.id, marker is not None,
-                                        position if position is not None else 0.0, rect)
+                                        self._capture.get_position_confidence(), rect)
                 self._interruptible_sleep_event(0.04, stop_event)
         finally:
             if held:
