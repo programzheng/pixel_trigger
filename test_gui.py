@@ -3,6 +3,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from unittest.mock import Mock
+from collections import deque
 
 import tkinter as tk
 from PIL import Image
@@ -12,6 +14,30 @@ from models import Action, ActionType, Combo, PositionControl, Profile, TriggerM
 
 
 class ComboScaleDisplayTest(unittest.TestCase):
+    def test_o_sound_only_on_detection_transition_and_when_enabled(self):
+        app = App.__new__(App)
+        app._debug_data = {}
+        app._msg_queue = deque()
+        app.engine = SimpleNamespace(running=True)
+        app.profile = Profile()
+        app.root = Mock()
+        app._sound_enabled = Mock()
+        app._sound_enabled.get.return_value = True
+        with patch("gui.winsound.PlaySound") as sound:
+            for found in (False, True, True, False, True):
+                app._on_debug_info("combo", found, 0.9)
+            app._poll_queue()
+            self.assertEqual(sound.call_count, 2)
+            app._sound_enabled.get.return_value = False
+            app._on_debug_info("other", True, 0.9)
+            app._poll_queue()
+            self.assertEqual(sound.call_count, 2)
+            app._sound_enabled.get.return_value = True
+            app.engine.running = False
+            app._on_debug_info("stopped", True, 0.9)
+            app._poll_queue()
+            self.assertEqual(sound.call_count, 2)
+
     def test_position_selection_and_preview_preserve_transparency(self):
         root = tk.Tk()
         root.withdraw()

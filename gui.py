@@ -6,6 +6,7 @@ import os
 import collections
 import time
 import warnings
+import winsound
 import tkinter as tk
 
 warnings.filterwarnings("ignore", message=".*pin_memory.*")
@@ -76,6 +77,7 @@ class App:
         self._combo_active: dict[str, bool] = {}
         # debug 模式：顯示即時信心度 + 螢幕框線
         self._debug_mode = tk.BooleanVar(value=False)
+        self._sound_enabled = tk.BooleanVar(value=False)
         # combo_id → (found, confidence, match_rect|None) 最新偵測結果
         self._debug_data: dict[str, tuple] = {}
         # debug 覆蓋層視窗
@@ -187,6 +189,7 @@ class App:
             frm_status, text="Debug 框線", variable=self._debug_mode,
             command=self._on_debug_mode_toggle,
         ).pack(side="right", padx=10)
+        tk.Checkbutton(frm_status, text="O 音效", variable=self._sound_enabled).pack(side="right")
 
         # --- 啟動/停止 ---
         frm_ctrl = tk.Frame(self.root, padx=10, pady=10)
@@ -547,8 +550,11 @@ class App:
         self._msg_queue.append(("triggered", combo_id, active))
 
     def _on_debug_info(self, combo_id: str, found: bool, confidence: float, match_rect=None):
+        previous = self._debug_data.get(combo_id)
         # 直接寫 dict（CPython GIL 保證 dict 寫入原子性）
         self._debug_data[combo_id] = (found, confidence, match_rect)
+        if found and (previous is None or not previous[0]):
+            self._msg_queue.append(("sound",))
 
     def _on_cycle_complete(self, count: int):
         self._msg_queue.append(("cycle", count))
@@ -565,7 +571,13 @@ class App:
         while self._msg_queue:
             msg = self._msg_queue.popleft()
             kind = msg[0]
-            if kind == "triggered":
+            if kind == "sound":
+                if self.engine.running and self._sound_enabled.get():
+                    try:
+                        winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NOSTOP)
+                    except RuntimeError:
+                        pass  # 系統音效不可用時，不中斷自動化。
+            elif kind == "triggered":
                 _, combo_id, active = msg
                 self._combo_active[combo_id] = active
                 if not self._debug_mode.get() and self.tree.exists(combo_id):
