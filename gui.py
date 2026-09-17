@@ -16,6 +16,7 @@ import numpy as np
 from PIL import Image, ImageGrab, ImageTk
 
 import profile_manager
+from window_target import list_windows
 from automation import HookEngine
 from screen_capture import find_color_marker, ocr_read_image, ocr_from_screen
 from models import (
@@ -142,6 +143,17 @@ class App:
         # --- 偵測區域 ---
         frm_region = tk.LabelFrame(self.root, text="偵測區域 (留空=全螢幕)", padx=10, pady=5)
         frm_region.pack(fill="x", padx=10, pady=5)
+
+        window_row = tk.Frame(frm_region)
+        window_row.pack(fill="x", pady=(0, 5))
+        tk.Label(window_row, text="目標視窗:").pack(side="left")
+        self.cmb_window = ttk.Combobox(window_row, state="readonly", width=55)
+        self.cmb_window.pack(side="left", padx=5)
+        self.cmb_window.bind("<<ComboboxSelected>>", self._on_window_selected)
+        tk.Button(window_row, text="重新整理", command=self._refresh_windows).pack(side="left")
+        tk.Label(frm_region, text="選視窗後忽略 XY 並自動跟隨；需保持可見。最小化／關閉會停止。",
+                 fg="#666666").pack(anchor="w")
+        self._refresh_windows()
 
         grid = tk.Frame(frm_region)
         grid.pack(fill="x")
@@ -272,6 +284,7 @@ class App:
     # ══════════════════════════════════════════════════════
 
     def _sync_region_to_ui(self):
+        self._refresh_windows()
         if self.profile.scan_region:
             for i, val in enumerate(self.profile.scan_region):
                 self.region_vars[i].set(str(val))
@@ -279,8 +292,39 @@ class App:
             for var in self.region_vars:
                 var.set("")
 
+    def _refresh_windows(self):
+        self._windows = list_windows()
+        values = ["手動 XY／全螢幕"] + [
+            f"{title} [PID {pid}, HWND {hwnd}]" for hwnd, title, pid in self._windows]
+        selected = 0
+        if self.profile.window_title:
+            matches = [i + 1 for i, (hwnd, title, pid) in enumerate(self._windows)
+                       if (hwnd == self.profile.window_handle and pid == self.profile.window_pid)
+                       or (not self.profile.window_handle and title == self.profile.window_title)]
+            if len(matches) == 1:
+                selected = matches[0]
+            else:
+                values.append(f"請重新選擇：{self.profile.window_title}")
+                selected = len(values) - 1
+        self.cmb_window["values"] = values
+        self.cmb_window.current(selected)
+
+    def _on_window_selected(self, event=None):
+        if self.engine.running:
+            self._stop()
+        index = self.cmb_window.current()
+        if index == 0:
+            self.profile.window_title = ""
+            self.profile.window_handle = self.profile.window_pid = 0
+        elif 1 <= index <= len(self._windows):
+            hwnd, title, pid = self._windows[index - 1]
+            self.profile.window_title = title
+            self.profile.window_handle, self.profile.window_pid = hwnd, pid
+
     def _select_region(self):
         """隱藏主視窗 → 全螢幕框選 → 填入座標"""
+        self.cmb_window.current(0)
+        self._on_window_selected()
         self.root.withdraw()
         self.root.update_idletasks()
         # 短暫 delay 讓主視窗完全消失
@@ -529,6 +573,11 @@ class App:
                     self.lbl_status.config(text="運行中", fg="#4CAF50")
                 else:
                     self.lbl_status.config(text="已停止", fg="#888888")
+                    self.btn_toggle.config(text="啟動", bg="#4CAF50")
+                    self._combo_active.clear()
+                    self._debug_data.clear()
+                    self._hide_debug_overlay()
+                    self._refresh_combo_tree()
             elif kind == "hotkey":
                 self.toggle()
         for combo in self.profile.combos:
