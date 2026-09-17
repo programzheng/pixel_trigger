@@ -67,6 +67,13 @@ class HookEngine:
                 profile.window_handle, profile.window_pid = matches[0]
             if get_window_region(profile.window_handle, profile.window_pid) is None:
                 raise ValueError("目標視窗不可用，請還原視窗或重新選擇。")
+        for combo in profile.combos:
+            if combo.enabled and combo.action.action_type == ActionType.CLICK_IMAGE:
+                action = combo.action
+                if not 0 <= action.target_threshold <= 1:
+                    raise ValueError("點擊目標的圖片閾值必須介於 0~1。")
+                if not self._capture.load_template(action.target_image_path):
+                    raise ValueError("請指定有效的點擊目標圖片。")
         positions = [c for c in self._profile.combos
                      if c.enabled and c.trigger == TriggerMode.POSITION_CONTROL]
         for combo in positions:
@@ -84,7 +91,7 @@ class HookEngine:
                 if (other.enabled and other.id != combo.id
                         and (other.image_path or other.verify_text
                              or other.trigger == TriggerMode.POSITION_CONTROL)
-                        and other.action.action_type in (ActionType.CLICK, ActionType.RAPID_CLICK,
+                        and other.action.action_type in (ActionType.CLICK, ActionType.CLICK_IMAGE, ActionType.RAPID_CLICK,
                                                         ActionType.HOLD_MOUSE)
                         and other.action.mouse_button == combo.action.mouse_button):
                     raise ValueError("位置控制的滑鼠鍵不能同時由其他啟用的 Combo 操作。")
@@ -299,6 +306,8 @@ class HookEngine:
             input_controller.mouse_click(
                 action.mouse_button.value, action.delay_min, action.delay_max, self._stop_event
             )
+        elif at == ActionType.CLICK_IMAGE:
+            self._click_target_image(combo, self._stop_event)
         elif at == ActionType.RAPID_CLICK:
             input_controller.mouse_rapid_click(
                 action.mouse_button.value,
@@ -327,6 +336,26 @@ class HookEngine:
             input_controller.key_hold(
                 action.key, action.duration, self._stop_event
             )
+
+    def _click_target_image(self, combo: Combo, stop_event: threading.Event):
+        action = combo.action
+        self._interruptible_sleep_event(random.uniform(action.delay_min, action.delay_max), stop_event)
+        if stop_event.is_set() or self._stop_event.is_set():
+            return
+        region = self._scan_region()
+        if self._stop_event.is_set():
+            return
+        frame = self._capture.grab_frame(region)
+        if frame is None:
+            return
+        found, _confidence, pos = self._capture.match_template(
+            frame, action.target_image_path, action.target_threshold, region,
+            scale_limit=1, stop_event=stop_event,
+        )
+        if (not found or pos is None or stop_event.is_set() or self._stop_event.is_set()
+                or self._scan_region() != region):
+            return
+        input_controller.pyautogui.click(x=pos[0], y=pos[1], button=action.mouse_button.value)
 
     def _start_continuous_action(self, combo: Combo):
         stop_evt = threading.Event()
@@ -408,6 +437,8 @@ class HookEngine:
                 input_controller.mouse_click(
                     action.mouse_button.value, action.delay_min, action.delay_max, stop_event
                 )
+            elif at == ActionType.CLICK_IMAGE:
+                self._click_target_image(combo, stop_event)
             elif at == ActionType.RAPID_CLICK:
                 input_controller.mouse_rapid_click(
                     action.mouse_button.value,
