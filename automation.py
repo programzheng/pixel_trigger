@@ -11,6 +11,7 @@ from datetime import datetime
 import input_controller
 from models import ActionType, Combo, Profile, TriggerMode
 from screen_capture import ScreenCapture, find_color_marker
+from window_target import get_window_region, list_windows
 
 
 class HookEngine:
@@ -56,6 +57,16 @@ class HookEngine:
     def start(self):
         if self._running or not self._profile or (self._thread and self._thread.is_alive()):
             return
+        profile = self._profile
+        if profile.window_title:
+            if not profile.window_handle:
+                matches = [(hwnd, pid) for hwnd, title, pid in list_windows()
+                           if title == profile.window_title]
+                if len(matches) != 1:
+                    raise ValueError("目標視窗不存在或有同名視窗，請重新選擇目標視窗。")
+                profile.window_handle, profile.window_pid = matches[0]
+            if get_window_region(profile.window_handle, profile.window_pid) is None:
+                raise ValueError("目標視窗不可用，請還原視窗或重新選擇。")
         positions = [c for c in self._profile.combos
                      if c.enabled and c.trigger == TriggerMode.POSITION_CONTROL]
         for combo in positions:
@@ -142,7 +153,10 @@ class HookEngine:
             ]
 
             # 截圖一次，所有 combo 共用
-            frame = self._capture.grab_frame(profile.scan_region)
+            region = self._scan_region()
+            if self._stop_event.is_set():
+                break
+            frame = self._capture.grab_frame(region)
             if frame is None:
                 self._interruptible_sleep(0.5)
                 continue
@@ -155,7 +169,7 @@ class HookEngine:
                     continue
                 if worker is not None:
                     worker.result()  # 讓執行錯誤顯示在終端機，不留下假的活躍狀態。
-                workers[combo.id] = pool.submit(self._process_combo, combo, frame, profile.scan_region)
+                workers[combo.id] = pool.submit(self._process_combo, combo, frame, region)
 
             self.cycle_count += 1
             # 每輪回報，GUI 在 main thread 定時更新。
@@ -164,6 +178,17 @@ class HookEngine:
 
             interval = profile.scan_interval if profile else 0.1
             self._interruptible_sleep(interval)
+
+    def _scan_region(self):
+        profile = self._profile
+        if profile.window_title:
+            region = get_window_region(profile.window_handle, profile.window_pid)
+            if region is None:
+                self._stop_event.set()
+                for event in list(self._action_stop_events.values()):
+                    event.set()
+            return region
+        return profile.scan_region
 
     def _process_combo(
         self, combo: Combo, frame, region: tuple[int, int, int, int] | None
@@ -233,6 +258,8 @@ class HookEngine:
         if self._stop_event.is_set():
             return
         was_visible = self._prev_visible.get(combo.id, False)
+        if self._profile and self._profile.window_title and self._scan_region() != region:
+            return
         self._prev_visible[combo.id] = found
 
         # Debug callback — 每個週期都回報
@@ -413,7 +440,11 @@ class HookEngine:
             while not stop_event.is_set() and not self._stop_event.is_set():
                 if not combo.enabled or combo not in self._profile.combos:
                     break
-                frame, screen_region = self._capture.position_frame(combo, self._stop_event)
+                region = self._scan_region()
+                if self._stop_event.is_set():
+                    break
+                frame, screen_region = self._capture.position_frame(
+                    combo, self._stop_event, scan_region=region)
                 marker = find_color_marker(frame, settings)
                 position = marker[0][0] / max(1, frame.shape[1] - 1) if marker else None
                 should_hold = held

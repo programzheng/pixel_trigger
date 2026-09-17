@@ -154,7 +154,7 @@ class ScreenCapture:
         try:
             if region:
                 x, y, w, h = region
-                screenshot = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+                screenshot = ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
             else:
                 screenshot = ImageGrab.grab()
             frame = np.array(screenshot)
@@ -284,13 +284,18 @@ class ScreenCapture:
 
         return False, best_conf, None
 
-    def position_frame(self, combo: Combo, stop_event=None):
+    def position_frame(self, combo: Combo, stop_event=None, *, scan_region=None):
         """定位觸發圖片，將圖片內區域換算為螢幕上的彩色區塊。"""
         settings = combo.position_control
         if settings.region_space == "screen":
+            if scan_region is not None:
+                x, y, w, h = settings.region
+                sx, sy, sw, sh = scan_region
+                if not (sx <= x and sy <= y and x + w <= sx + sw and y + h <= sy + sh):
+                    return None, None
             return self.grab_frame(settings.region, color=True), settings.region
         region = settings.region
-        frame = self.grab_frame(color=True)
+        frame = self.grab_frame(scan_region, color=True)
         if frame is None:
             return None, None
         found, _, center = self.match_template(
@@ -307,7 +312,8 @@ class ScreenCapture:
         x2, y2 = left + round((x + w) * mw / tw), top + round((y + h) * mh / th)
         if not (0 <= x1 < x2 <= frame.shape[1] and 0 <= y1 < y2 <= frame.shape[0]):
             return None, None
-        return frame[y1:y2, x1:x2], (x1, y1, x2 - x1, y2 - y1)
+        sx, sy = scan_region[:2] if scan_region else (0, 0)
+        return frame[y1:y2, x1:x2], (x1 + sx, y1 + sy, x2 - x1, y2 - y1)
 
     def get_match_size(self, image_path: str) -> tuple[int, int] | None:
         """回傳最近一次成功匹配的實際尺寸，供 OCR 與偵測框線使用。"""

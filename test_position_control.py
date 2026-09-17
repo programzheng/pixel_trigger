@@ -180,6 +180,9 @@ class PositionControlTest(unittest.TestCase):
             self.assertEqual(frame.shape, (80, 202, 3))
             self.assertAlmostEqual(find_color_marker(frame, self.settings)[0][0], 60.5)
             self.assertEqual(match.call_args.kwargs["exclude_region"], self.settings.region)
+            frame, region = capture.position_frame(self.combo, scan_region=(-400, 200, 400, 240))
+            self.assertEqual(region, (-350, 270, 202, 80))
+            self.assertEqual(frame.shape, (80, 202, 3))
         with patch.object(capture, "grab_frame", return_value=screen), \
                 patch.object(capture, "match_template", return_value=(False, 0.2, None)):
             self.assertEqual(capture.position_frame(self.combo), (None, None))

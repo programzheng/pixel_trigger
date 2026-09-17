@@ -199,6 +199,9 @@ class Profile:
     scan_interval: float = 0.1
     hotkey: str = "F6"
     combos: list[Combo] = field(default_factory=list)
+    window_title: str = ""
+    window_handle: int = field(default=0, repr=False, compare=False)
+    window_pid: int = field(default=0, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         region = list(self.scan_region) if self.scan_region else None
@@ -208,6 +211,7 @@ class Profile:
             "scan_interval": self.scan_interval,
             "hotkey": self.hotkey,
             "combos": [c.to_dict() for c in self.combos],
+            "window_title": self.window_title,
         }
 
     @classmethod
@@ -223,4 +227,5 @@ class Profile:
             scan_interval=d.get("scan_interval", 0.1),
             hotkey=d.get("hotkey", "F6"),
             combos=[Combo.from_dict(c) for c in d.get("combos", [])],
+            window_title=d.get("window_title", ""),
         )
