@@ -179,7 +179,6 @@ class ScreenCapture:
         region: tuple[int, int, int, int] | None = None,
         scale_limit: int | None = None,
         stop_event=None,
-        exclude_region: tuple[int, int, int, int] | None = None,
     ) -> tuple[bool, float, tuple[int, int] | None]:
         """先比對記住的比例（預設原尺寸），失敗才搜尋並記住新比例。
         回傳 (是否偵測到, 信心度, 螢幕絕對座標中心點 | None)
@@ -192,14 +191,6 @@ class ScreenCapture:
                 return False, 0.0, None
 
         template, tw, th, mask = self._cache[image_path]
-        if exclude_region is not None:
-            x, y, w, h = exclude_region
-            if x < 0 or y < 0 or x + w > tw or y + h > th:
-                return False, 0.0, None
-            mask = mask.copy() if mask is not None else np.full_like(template, 255)
-            mask[y:y + h, x:x + w] = 0
-            if not np.any(mask):
-                return False, 0.0, None
 
         fh, fw = frame.shape
         best_conf = 0.0
@@ -292,7 +283,8 @@ class ScreenCapture:
         return False, best_conf, None
 
     def position_frame(self, combo: Combo, stop_event=None, *, scan_region=None):
-        """定位觸發圖片，將圖片內區域換算為螢幕上的彩色區塊。"""
+        """用完整觸發圖片定位，再將框選區域換算為箭頭追蹤區塊。"""
+        self._match_state.position_confidence = 0.0
         settings = combo.position_control
         if settings.region_space == "screen":
             if scan_region is not None:
@@ -300,15 +292,17 @@ class ScreenCapture:
                 sx, sy, sw, sh = scan_region
                 if not (sx <= x and sy <= y and x + w <= sx + sw and y + h <= sy + sh):
                     return None, None
-            return self.grab_frame(settings.region, color=True), settings.region
+            frame = self.grab_frame(settings.region, color=True)
+            self._match_state.position_confidence = 1.0 if frame is not None else 0.0
+            return frame, settings.region
         region = settings.region
         frame = self.grab_frame(scan_region, color=True)
         if frame is None:
             return None, None
-        found, _, center = self.match_template(
+        found, confidence, center = self.match_template(
             cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), combo.image_path,
-            combo.match_threshold, scale_limit=1, stop_event=stop_event,
-            exclude_region=region)
+            combo.match_threshold, scale_limit=1, stop_event=stop_event)
+        self._match_state.position_confidence = confidence
         if not found:
             return None, None
         mw, mh = self.get_match_size(combo.image_path)
@@ -321,6 +315,10 @@ class ScreenCapture:
             return None, None
         sx, sy = scan_region[:2] if scan_region else (0, 0)
         return frame[y1:y2, x1:x2], (x1 + sx, y1 + sy, x2 - x1, y2 - y1)
+
+    def get_position_confidence(self) -> float:
+        """取得本執行緒最近一次位置控制的圖片定位分數。"""
+        return getattr(self._match_state, "position_confidence", 0.0)
 
     def get_match_size(self, image_path: str) -> tuple[int, int] | None:
         """回傳最近一次成功匹配的實際尺寸，供 OCR 與偵測框線使用。"""
