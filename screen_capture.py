@@ -9,6 +9,28 @@ import cv2
 import numpy as np
 from PIL import ImageGrab
 
+from models import Combo, PositionControl
+
+
+def find_color_marker(frame: np.ndarray, settings: PositionControl):
+    """從 RGB 區域找唯一的色彩標記；多個候選時不猜測。"""
+    # ponytail: 區域內需只有一個同色標記；同色背景無法排除時再加形狀辨識。
+    if frame is None or frame.size == 0:
+        return None
+    hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV).astype(np.int16)
+    target = cv2.cvtColor(np.uint8([[settings.color]]), cv2.COLOR_RGB2HSV)[0, 0]
+    hue_delta = np.abs(hsv[:, :, 0] - int(target[0]))
+    hue_delta = np.minimum(hue_delta, 180 - hue_delta)
+    mask = ((hue_delta <= settings.tolerance)
+            & (np.abs(hsv[:, :, 1] - int(target[1])) <= 80)
+            & (np.abs(hsv[:, :, 2] - int(target[2])) <= 80)).astype(np.uint8)
+    _, _, stats, centers = cv2.connectedComponentsWithStats(mask)
+    candidates = np.flatnonzero(stats[1:, cv2.CC_STAT_AREA] >= settings.min_area) + 1
+    if len(candidates) != 1:
+        return None
+    index = candidates[0]
+    return tuple(centers[index]), tuple(int(v) for v in stats[index, :4])
+
 
 # ponytail: 等比例 0.5–4 倍；範圍不足時再擴大，不處理非等比例拉伸。
 MATCH_SCALES = (1.0,) + tuple(
@@ -124,7 +146,7 @@ class ScreenCapture:
         self._scale_offsets.pop(path, None)
 
     def grab_frame(
-        self, region: tuple[int, int, int, int] | None = None
+        self, region: tuple[int, int, int, int] | None = None, *, color: bool = False
     ) -> np.ndarray | None:
         """截取螢幕一次，回傳灰階 frame。每個掃描週期只呼叫一次。
         使用 PIL.ImageGrab — 每次呼叫自行建立/釋放 GDI 資源，無執行緒問題。
@@ -136,6 +158,8 @@ class ScreenCapture:
             else:
                 screenshot = ImageGrab.grab()
             frame = np.array(screenshot)
+            if color:
+                return frame
             return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         except Exception:
             return None
@@ -148,6 +172,7 @@ class ScreenCapture:
         region: tuple[int, int, int, int] | None = None,
         scale_limit: int | None = None,
         stop_event=None,
+        exclude_region: tuple[int, int, int, int] | None = None,
     ) -> tuple[bool, float, tuple[int, int] | None]:
         """先比對記住的比例（預設原尺寸），失敗才搜尋並記住新比例。
         回傳 (是否偵測到, 信心度, 螢幕絕對座標中心點 | None)
@@ -160,6 +185,14 @@ class ScreenCapture:
                 return False, 0.0, None
 
         template, tw, th, mask = self._cache[image_path]
+        if exclude_region is not None:
+            x, y, w, h = exclude_region
+            if x < 0 or y < 0 or x + w > tw or y + h > th:
+                return False, 0.0, None
+            mask = mask.copy() if mask is not None else np.full_like(template, 255)
+            mask[y:y + h, x:x + w] = 0
+            if not np.any(mask):
+                return False, 0.0, None
 
         fh, fw = frame.shape
         best_conf = 0.0
@@ -250,6 +283,31 @@ class ScreenCapture:
             return True, best_conf, (cx, cy)
 
         return False, best_conf, None
+
+    def position_frame(self, combo: Combo, stop_event=None):
+        """定位觸發圖片，將圖片內區域換算為螢幕上的彩色區塊。"""
+        settings = combo.position_control
+        if settings.region_space == "screen":
+            return self.grab_frame(settings.region, color=True), settings.region
+        region = settings.region
+        frame = self.grab_frame(color=True)
+        if frame is None:
+            return None, None
+        found, _, center = self.match_template(
+            cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), combo.image_path,
+            combo.match_threshold, scale_limit=1, stop_event=stop_event,
+            exclude_region=region)
+        if not found:
+            return None, None
+        mw, mh = self.get_match_size(combo.image_path)
+        tw, th = self.get_template_size(combo.image_path)
+        x, y, w, h = region
+        left, top = center[0] - mw // 2, center[1] - mh // 2
+        x1, y1 = left + round(x * mw / tw), top + round(y * mh / th)
+        x2, y2 = left + round((x + w) * mw / tw), top + round((y + h) * mh / th)
+        if not (0 <= x1 < x2 <= frame.shape[1] and 0 <= y1 < y2 <= frame.shape[0]):
+            return None, None
+        return frame[y1:y2, x1:x2], (x1, y1, x2 - x1, y2 - y1)
 
     def get_match_size(self, image_path: str) -> tuple[int, int] | None:
         """回傳最近一次成功匹配的實際尺寸，供 OCR 與偵測框線使用。"""

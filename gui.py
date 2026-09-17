@@ -17,13 +17,14 @@ from PIL import Image, ImageGrab, ImageTk
 
 import profile_manager
 from automation import HookEngine
-from screen_capture import ocr_read_image, ocr_from_screen
+from screen_capture import find_color_marker, ocr_read_image, ocr_from_screen
 from models import (
     Action,
     ActionType,
     Combo,
     MouseButton,
     Profile,
+    PositionControl,
     TextMatchMode,
     TriggerMode,
 )
@@ -33,6 +34,7 @@ from models import (
 TRIGGER_LABELS = {
     TriggerMode.ON_APPEAR: "出現時觸發一次",
     TriggerMode.WHILE_VISIBLE: "可見期間持續執行",
+    TriggerMode.POSITION_CONTROL: "位置控制",
 }
 
 ACTION_LABELS = {
@@ -206,6 +208,8 @@ class App:
             self._load_profile_from_path(paths[idx])
 
     def _load_profile_from_path(self, path: Path):
+        if self.engine.running:
+            self._stop()
         try:
             self.profile = profile_manager.load_profile(path)
             self._profile_path = path
@@ -247,6 +251,8 @@ class App:
                 break
 
     def _new_profile(self):
+        if self.engine.running:
+            self._stop()
         name = simpledialog.askstring("新增 Profile", "輸入名稱:", parent=self.root)
         if not name:
             return
@@ -351,6 +357,8 @@ class App:
         return None
 
     def _add_combo(self):
+        if self.engine.running:
+            self._stop()
         combo = Combo()
         if ComboEditor(self.root, combo).result:
             self.profile.combos.append(combo)
@@ -358,6 +366,8 @@ class App:
             self._auto_save()
 
     def _edit_combo(self):
+        if self.engine.running:
+            self._stop()
         combo = self._get_selected_combo()
         if combo and ComboEditor(self.root, combo).result:
             self._refresh_combo_tree()
@@ -367,6 +377,8 @@ class App:
         self._edit_combo()
 
     def _delete_combo(self):
+        if self.engine.running:
+            self._stop()
         combo = self._get_selected_combo()
         if combo:
             self.profile.combos = [c for c in self.profile.combos if c.id != combo.id]
@@ -374,6 +386,8 @@ class App:
             self._auto_save()
 
     def _toggle_combo_enabled(self):
+        if self.engine.running:
+            self._stop()
         combo = self._get_selected_combo()
         if combo:
             combo.enabled = not combo.enabled
@@ -411,13 +425,18 @@ class App:
             self._start()
 
     def _start(self):
-        enabled = [c for c in self.profile.combos if c.enabled and c.image_path]
+        enabled = [c for c in self.profile.combos if c.enabled and
+                   (c.image_path or c.verify_text or c.trigger == TriggerMode.POSITION_CONTROL)]
         if not enabled:
-            messagebox.showwarning("提醒", "沒有可用的 Combo！\n請確認至少有一個 Combo 已啟用且設定了圖片。")
+            messagebox.showwarning("提醒", "請啟用至少一個已設定圖片、文字或位置控制的 Combo。")
             return
         self._sync_region_from_ui()
         self.engine.set_profile(self.profile)
-        self.engine.start()
+        try:
+            self.engine.start()
+        except ValueError as e:
+            messagebox.showerror("設定錯誤", str(e))
+            return
         if not self.engine.running:
             return
         self.btn_toggle.config(text="停止", bg="#F44336")
@@ -543,6 +562,7 @@ class ComboEditor:
 
         self.win = tk.Toplevel(parent)
         self.win.title("編輯 Combo")
+        self.win.transient(parent)
         self.win.geometry("420x740")
         self.win.minsize(380, 500)
         self.win.resizable(True, True)
@@ -575,6 +595,7 @@ class ComboEditor:
         tk.Entry(sf, textvariable=self.var_name, width=40).pack(fill="x", **pad)
 
         # 圖片
+        image_start = len(sf.winfo_children())
         frm_img = tk.Frame(sf)
         frm_img.pack(fill="x", **pad)
         tk.Label(frm_img, text="觸發圖片:").pack(side="left")
@@ -656,7 +677,11 @@ class ComboEditor:
         self._on_match_mode_change()  # 初始顯示/隱藏
 
         # 觸發模式
-        tk.Label(sf, text="觸發模式:").pack(anchor="w", **pad)
+        self.image_widgets = sf.winfo_children()[image_start:]
+        self.position_image_widgets = (frm_img, frm_preview, frm_thresh)
+        self.image_pack = {w: w.pack_info() for w in self.image_widgets if w.winfo_manager() == "pack"}
+        self.lbl_trigger = tk.Label(sf, text="觸發模式:")
+        self.lbl_trigger.pack(anchor="w", **pad)
         self.var_trigger = tk.StringVar(value=combo.trigger.value)
         frm_trigger = tk.Frame(sf)
         frm_trigger.pack(fill="x", **pad)
@@ -668,9 +693,11 @@ class ComboEditor:
             ).pack(anchor="w")
 
         # 動作類型
-        tk.Label(sf, text="動作:").pack(anchor="w", **pad)
+        self.lbl_action = tk.Label(sf, text="動作:")
+        self.lbl_action.pack(anchor="w", **pad)
         self.var_action_type = tk.StringVar(value=combo.action.action_type.value)
         frm_at = tk.Frame(sf)
+        self.frm_action_types = frm_at
         frm_at.pack(fill="x", **pad)
         action_types = list(ActionType)
         for i, at in enumerate(action_types):
@@ -683,6 +710,7 @@ class ComboEditor:
         # 動作參數
         self.frm_params = tk.LabelFrame(sf, text="動作參數", padx=10, pady=5)
         self.frm_params.pack(fill="x", padx=10, pady=5)
+        self._build_position_ui(sf)
 
         # 滑鼠按鍵
         self.frm_mouse_btn = tk.Frame(self.frm_params)
@@ -781,6 +809,8 @@ class ComboEditor:
         self._preview_photo = ImageTk.PhotoImage(img)
         self.lbl_thumb.config(image=self._preview_photo)
         self.lbl_thumb.pack(anchor="w", padx=10, pady=2)
+        if hasattr(self, "frm_position"):
+            self._preview_position()
 
         # 更換圖片時自動 OCR 讀取文字帶入
         if auto_ocr and hasattr(self, "var_verify_text"):
@@ -839,6 +869,153 @@ class ComboEditor:
             self.var_image.set(dlg.result_path)
             self._update_preview(dlg.result_path, auto_ocr=True)
 
+    def _build_position_ui(self, parent):
+        settings = self.combo.position_control
+        self.frm_position = tk.LabelFrame(parent, text="位置控制設定", padx=8, pady=5)
+        tk.Label(self.frm_position, text="直接框選觸發圖片內的路徑，排除固定同色區塊。",
+                 wraplength=340, justify="left").pack(anchor="w")
+        row = tk.Frame(self.frm_position)
+        row.pack(fill="x")
+        self.position_region_vars = [tk.StringVar(value=str(v) if v is not None else "")
+                                     for v in (settings.region if settings.region_space == "template"
+                                               and settings.region else (None,) * 4)]
+        for label, var in zip(("X", "Y", "寬", "高"), self.position_region_vars):
+            tk.Label(row, text=label).pack(side="left")
+            tk.Entry(row, textvariable=var, width=5).pack(side="left")
+        tk.Button(self.frm_position, text="框選觸發圖片區塊", command=self._select_position_region).pack(anchor="w")
+        self.var_position_color = tk.StringVar(value="#%02x%02x%02x" % settings.color)
+        self.var_position_tolerance = tk.StringVar(value=str(settings.tolerance))
+        self.var_position_area = tk.StringVar(value=str(settings.min_area))
+        self.var_position_press = tk.StringVar(value=f"{settings.press_at * 100:g}")
+        self.var_position_release = tk.StringVar(value=f"{settings.release_at * 100:g}")
+        for label, var in (("標記顏色 (#RRGGBB)", self.var_position_color),
+                           ("顏色容差 (0~90)", self.var_position_tolerance),
+                           ("最小面積 (像素)", self.var_position_area),
+                           ("按住位置 (%)", self.var_position_press),
+                           ("放開位置 (%)", self.var_position_release)):
+            row = tk.Frame(self.frm_position)
+            row.pack(fill="x")
+            tk.Label(row, text=label, width=22, anchor="w").pack(side="left")
+            tk.Entry(row, textvariable=var, width=10).pack(side="left")
+        self.var_position_preview = tk.BooleanVar(value=True)
+        self._position_preview_job = None
+        tk.Checkbutton(self.frm_position, text="預覽觸發圖片區塊",
+                       variable=self.var_position_preview, command=self._preview_position).pack(anchor="w")
+        self.var_position_click = tk.StringVar(value="取色")
+        row = tk.Frame(self.frm_position)
+        row.pack(fill="x")
+        for mode in ("取色", "按住線", "放開線"):
+            tk.Radiobutton(row, text=mode, variable=self.var_position_click,
+                           value=mode).pack(side="left")
+        self.position_canvas = tk.Canvas(self.frm_position, width=340, height=170,
+                                         bg="#222222", highlightthickness=0)
+        self.position_canvas.pack(anchor="w")
+        self.position_canvas.bind("<Button-1>", self._position_preview_click)
+        self.lbl_position_status = tk.Label(self.frm_position, text="先框選觸發圖片區塊，再點圖片取色或設定界線。",
+                                            wraplength=340, justify="left")
+        self.lbl_position_status.pack(anchor="w")
+        self._position_frame = None
+        self.win.bind("<Destroy>", self._cancel_position_preview, add="+")
+
+    def _position_settings(self):
+        if any(not var.get().strip() for var in self.position_region_vars):
+            raise ValueError("請先框選觸發圖片的偵測區塊。")
+        value = self.var_position_color.get().strip()
+        if len(value) != 7 or not value.startswith("#"):
+            raise ValueError("標記顏色格式必須是 #RRGGBB。")
+        settings = PositionControl(
+            region=tuple(int(var.get()) for var in self.position_region_vars),
+            color=tuple(int(value[i:i + 2], 16) for i in (1, 3, 5)),
+            tolerance=int(self.var_position_tolerance.get()),
+            min_area=int(self.var_position_area.get()),
+            press_at=self._to_float(self.var_position_press.get()) / 100,
+            release_at=self._to_float(self.var_position_release.get()) / 100)
+        settings.validate()
+        try:
+            with Image.open(self.var_image.get().strip()) as image:
+                tw, th = image.size
+        except (OSError, ValueError):
+            raise ValueError("請先指定有效的觸發圖片。") from None
+        x, y, w, h = settings.region
+        if x < 0 or y < 0 or x + w > tw or y + h > th or w * h == tw * th:
+            raise ValueError("請在觸發圖片內框選局部區域，保留部分圖片供定位使用。")
+        return settings
+
+    def _select_position_region(self):
+        try:
+            with Image.open(self.var_image.get().strip()) as image:
+                image = image.convert("RGB")
+        except (OSError, ValueError):
+            messagebox.showinfo("提示", "請先指定有效的觸發圖片。", parent=self.win)
+            return
+        selector = ImageRegionSelector(self.win, image)
+        self.win.grab_set()
+        if selector.result:
+            for var, value in zip(self.position_region_vars, selector.result):
+                var.set(str(value))
+            self.var_position_preview.set(True)
+            self._preview_position()
+
+    def _cancel_position_preview(self, event):
+        if event.widget == self.win and self._position_preview_job is not None:
+            self.win.after_cancel(self._position_preview_job)
+            self._position_preview_job = None
+
+    def _preview_position(self):
+        if self._position_preview_job is not None:
+            self.win.after_cancel(self._position_preview_job)
+            self._position_preview_job = None
+        if not self.var_position_preview.get():
+            return
+        try:
+            settings = self._position_settings()
+            with Image.open(self.var_image.get().strip()) as image:
+                x, y, w, h = settings.region
+                frame = np.array(image.convert("RGB").crop((x, y, x + w, y + h)))
+            self._position_frame = frame
+            if frame is None:
+                raise ValueError("無法擷取畫面。")
+            h, w = frame.shape[:2]
+            scale = min(340 / w, 170 / h)
+            width, height = max(1, round(w * scale)), max(1, round(h * scale))
+            self._position_preview_size = (width, height)
+            self._position_photo = ImageTk.PhotoImage(Image.fromarray(frame).resize((width, height)))
+            canvas = self.position_canvas
+            canvas.delete("all")
+            canvas.create_image(0, 0, image=self._position_photo, anchor="nw")
+            for fraction, color in ((settings.press_at, "#00ff88"), (settings.release_at, "#ff5555")):
+                x = fraction * (width - 1)
+                canvas.create_line(x, 0, x, height, fill=color, width=2)
+            marker = find_color_marker(frame, settings)
+            if marker:
+                (cx, cy), _ = marker
+                px, py = cx * scale, cy * scale
+                canvas.create_oval(px - 4, py - 4, px + 4, py + 4, outline="cyan", width=2)
+                self.lbl_position_status.config(text=f"標記位置：{cx / max(1, w - 1):.1%}；綠線按住、紅線放開。")
+            else:
+                self.lbl_position_status.config(text="未找到唯一標記：調整顏色／容差／區域。此時會放開。")
+        except (ValueError, TypeError, OSError) as e:
+            self._position_frame = None
+            self.position_canvas.delete("all")
+            self.lbl_position_status.config(text=str(e))
+
+    def _position_preview_click(self, event):
+        frame = self._position_frame
+        if frame is None:
+            return
+        width, height = self._position_preview_size
+        if not (0 <= event.x < width and 0 <= event.y < height):
+            return
+        mode = self.var_position_click.get()
+        if mode == "取色":
+            x = min(frame.shape[1] - 1, int(event.x * frame.shape[1] / width))
+            y = min(frame.shape[0] - 1, int(event.y * frame.shape[0] / height))
+            self.var_position_color.set("#%02x%02x%02x" % tuple(frame[y, x]))
+        else:
+            var = self.var_position_press if mode == "按住線" else self.var_position_release
+            var.set(f"{event.x / max(1, width - 1) * 100:.1f}")
+        self._preview_position()
+
     def _on_match_mode_change(self):
         """部分符合時才顯示吻合比例欄位"""
         if self.var_text_match_mode.get() == "partial":
@@ -854,6 +1031,29 @@ class ComboEditor:
         """根據動作類型 + 觸發模式，顯示/隱藏相關參數"""
         at = self.var_action_type.get()
         trigger = self.var_trigger.get()
+        position_mode = trigger == TriggerMode.POSITION_CONTROL.value
+        for widget in self.image_widgets:
+            widget.pack_forget()
+        for widget, options in self.image_pack.items():
+            if not position_mode or widget in self.position_image_widgets:
+                widget.pack(**{**options, "before": self.lbl_trigger})
+        if not position_mode:
+            if self.var_image.get().strip():
+                self._update_preview(self.var_image.get().strip())
+                self.lbl_thumb.pack(before=self.lbl_trigger, anchor="w", padx=10, pady=2)
+        self.frm_position.pack_forget()
+        self.lbl_action.pack_forget()
+        self.frm_action_types.pack_forget()
+        if position_mode:
+            self.var_action_type.set(ActionType.HOLD_MOUSE.value)
+            self.frm_position.pack(fill="x", padx=10, pady=5, before=self.frm_params)
+            self.var_position_preview.set(True)
+            self._preview_position()
+        else:
+            self.lbl_action.pack(anchor="w", padx=10, pady=3, before=self.frm_params)
+            self.frm_action_types.pack(fill="x", padx=10, pady=3, before=self.frm_params)
+            self.var_position_preview.set(False)
+        at = self.var_action_type.get()
 
         is_mouse = at in ("click", "rapid_click", "hold_mouse")
         is_key = at in ("key_press", "rapid_key", "hold_key")
@@ -874,10 +1074,11 @@ class ComboEditor:
             self.frm_mouse_btn.pack(fill="x", pady=2)
         if is_key:
             self.frm_key.pack(fill="x", pady=2)
-        self.frm_delay.pack(fill="x", pady=2)
-        if need_duration:
+        if not position_mode:
+            self.frm_delay.pack(fill="x", pady=2)
+        if need_duration and not position_mode:
             self.frm_duration.pack(fill="x", pady=2)
-        if is_rapid or is_hold:
+        if (is_rapid or is_hold) and not position_mode:
             self._lbl_interval.config(text="放開間隔(秒):" if is_hold else "間隔(秒):")
             self.frm_interval.pack(fill="x", pady=2)
 
@@ -902,6 +1103,7 @@ class ComboEditor:
                 else self.combo.text_match_ratio
             )
             trigger = TriggerMode(self.var_trigger.get())
+            position_settings = self._position_settings() if trigger == TriggerMode.POSITION_CONTROL else self.combo.position_control
 
             at = self.var_action_type.get()
             action_type = ActionType(at)
@@ -932,6 +1134,7 @@ class ComboEditor:
             self.combo.text_match_mode = text_match_mode
             self.combo.text_match_ratio = text_match_ratio
             self.combo.trigger = trigger
+            self.combo.position_control = position_settings
 
             action = self.combo.action
             action.action_type = action_type
@@ -1025,6 +1228,50 @@ class RegionSelector:
 # ══════════════════════════════════════════════════════════
 #  色彩去背對話框
 # ══════════════════════════════════════════════════════════
+
+class ImageRegionSelector(RegionSelector):
+    """在觸發圖片上拖曳框選，回傳原圖像素座標。"""
+
+    def __init__(self, parent, image):
+        self.result = None
+        self._start_x = self._start_y = 0
+        self._rect_id = None
+        self._image_size = image.size
+        scale = min(1, 800 / image.width, 500 / image.height,
+                    (parent.winfo_screenwidth() - 100) / image.width,
+                    (parent.winfo_screenheight() - 160) / image.height)
+        self._display_size = (max(1, round(image.width * scale)),
+                              max(1, round(image.height * scale)))
+        self.overlay = tk.Toplevel(parent)
+        self.overlay.title("框選觸發圖片區塊")
+        self.overlay.transient(parent)
+        self.overlay.attributes("-topmost", True)
+        self.overlay.resizable(False, False)
+        tk.Label(self.overlay, text="拖曳框選箭頭移動路徑；保留部分圖片供定位使用。ESC 取消。",
+                 wraplength=max(200, self._display_size[0])).pack(padx=10, pady=8)
+        self._photo = ImageTk.PhotoImage(image.resize(self._display_size))
+        self.canvas = tk.Canvas(self.overlay, width=self._display_size[0],
+                                height=self._display_size[1], cursor="cross", highlightthickness=0)
+        self.canvas.pack(padx=10, pady=(0, 10))
+        self.canvas.create_image(0, 0, image=self._photo, anchor="nw")
+        self.canvas.bind("<ButtonPress-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.overlay.bind("<Escape>", lambda e: self._cancel())
+        self.overlay.grab_set()
+        self.overlay.wait_window()
+
+    def _on_release(self, event):
+        dw, dh = self._display_size
+        iw, ih = self._image_size
+        x1, x2 = sorted((self._start_x, event.x))
+        y1, y2 = sorted((self._start_y, event.y))
+        x1, x2 = (round(max(0, min(dw, x)) * iw / dw) for x in (x1, x2))
+        y1, y2 = (round(max(0, min(dh, y)) * ih / dh) for y in (y1, y2))
+        if x2 - x1 >= 6 and y2 - y1 >= 6:
+            self.result = (x1, y1, x2 - x1, y2 - y1)
+            self.overlay.destroy()
+
 
 class RemoveBgDialog:
     """點選背景色 → 移除相似顏色 → 存為帶 alpha 的 PNG"""

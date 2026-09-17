@@ -10,7 +10,7 @@ from datetime import datetime
 
 import input_controller
 from models import ActionType, Combo, Profile, TriggerMode
-from screen_capture import ScreenCapture
+from screen_capture import ScreenCapture, find_color_marker
 
 
 class HookEngine:
@@ -56,6 +56,27 @@ class HookEngine:
     def start(self):
         if self._running or not self._profile or (self._thread and self._thread.is_alive()):
             return
+        positions = [c for c in self._profile.combos
+                     if c.enabled and c.trigger == TriggerMode.POSITION_CONTROL]
+        for combo in positions:
+            combo.position_control.validate()
+            if combo.position_control.region_space == "template":
+                if not self._capture.load_template(combo.image_path):
+                    raise ValueError("位置控制請先指定有效的觸發圖片。")
+                tw, th = self._capture.get_template_size(combo.image_path)
+                x, y, w, h = combo.position_control.region
+                if x < 0 or y < 0 or x + w > tw or y + h > th or w * h == tw * th:
+                    raise ValueError("請在觸發圖片內框選局部區域，保留部分圖片供定位使用。")
+            if combo.action.action_type != ActionType.HOLD_MOUSE:
+                raise ValueError("位置控制需使用滑鼠長按。")
+            for other in self._profile.combos:
+                if (other.enabled and other.id != combo.id
+                        and (other.image_path or other.verify_text
+                             or other.trigger == TriggerMode.POSITION_CONTROL)
+                        and other.action.action_type in (ActionType.CLICK, ActionType.RAPID_CLICK,
+                                                        ActionType.HOLD_MOUSE)
+                        and other.action.mouse_button == combo.action.mouse_button):
+                    raise ValueError("位置控制的滑鼠鍵不能同時由其他啟用的 Combo 操作。")
         self._running = True
         self._stop_event.clear()
         self.cycle_count = 0
@@ -66,7 +87,7 @@ class HookEngine:
             self._on_status_change(True)
 
     def stop(self):
-        if not self._running:
+        if not self._running and not (self._thread and self._thread.is_alive()):
             return
         self._running = False
         self._stop_event.set()
@@ -87,10 +108,22 @@ class HookEngine:
         """每個 Combo 同時最多處理一張最新畫面，慢規則不阻塞其他規則。"""
         workers = {}
         try:
+            for combo in self._profile.combos:
+                if combo.enabled and combo.trigger == TriggerMode.POSITION_CONTROL:
+                    self._start_continuous_action(combo)
             with ThreadPoolExecutor(max_workers=max(1, len(self._profile.combos))) as pool:
-                self._scan_frames(pool, workers)
+                try:
+                    self._scan_frames(pool, workers)
+                finally:
+                    self._stop_event.set()
         finally:
             self._stop_event.set()
+            for evt in list(self._action_stop_events.values()):
+                evt.set()
+            for thread in list(self._active_actions.values()):
+                thread.join(timeout=2)
+            self._active_actions.clear()
+            self._action_stop_events.clear()
             self._running = False
             if self._on_status_change:
                 self._on_status_change(False)
@@ -104,7 +137,8 @@ class HookEngine:
 
             enabled_combos = [
                 c for c in profile.combos
-                if c.enabled and (c.image_path or c.verify_text)
+                if c.enabled and c.trigger != TriggerMode.POSITION_CONTROL
+                and (c.image_path or c.verify_text)
             ]
 
             # 截圖一次，所有 combo 共用
@@ -277,13 +311,17 @@ class HookEngine:
             daemon=True,
         )
         self._active_actions[combo.id] = t
-        self._notify_triggered(combo.id, True)
+        self._notify_triggered(combo.id, combo.trigger != TriggerMode.POSITION_CONTROL)
         print(f"[{datetime.now():%Y%m%d %H:%M:%S}][action] '{combo.name}' → {combo.action.action_type.value} 持續中...")
         t.start()
 
     def _run_continuous_action(self, combo: Combo, stop_event: threading.Event):
         try:
             self._continuous_action_loop(combo, stop_event)
+        except Exception:
+            if combo.trigger == TriggerMode.POSITION_CONTROL:
+                self._stop_event.set()
+            raise
         finally:
             if self._active_actions.get(combo.id) is threading.current_thread():
                 self._notify_triggered(combo.id, False)
@@ -304,6 +342,10 @@ class HookEngine:
         """
         action = combo.action
         at = action.action_type
+
+        if combo.trigger == TriggerMode.POSITION_CONTROL:
+            self._position_control_loop(combo, stop_event)
+            return
 
         if at == ActionType.HOLD_MOUSE:
             import pyautogui
@@ -363,6 +405,45 @@ class HookEngine:
             if not stop_event.is_set():
                 time.sleep(0.02)
 
+    def _position_control_loop(self, combo: Combo, stop_event: threading.Event):
+        settings = combo.position_control
+        button = combo.action.mouse_button.value
+        held = False
+        try:
+            while not stop_event.is_set() and not self._stop_event.is_set():
+                if not combo.enabled or combo not in self._profile.combos:
+                    break
+                frame, screen_region = self._capture.position_frame(combo, self._stop_event)
+                marker = find_color_marker(frame, settings)
+                position = marker[0][0] / max(1, frame.shape[1] - 1) if marker else None
+                should_hold = held
+                if position is None or position >= settings.release_at:
+                    should_hold = False
+                elif position <= settings.press_at:
+                    should_hold = True
+                if self._stop_event.is_set() or stop_event.is_set():
+                    break
+                if should_hold != held:
+                    if should_hold:
+                        held = True
+                        input_controller.pyautogui.mouseDown(button=button)
+                    else:
+                        input_controller.release_mouse(button)
+                        held = False
+                    self._notify_triggered(combo.id, held)
+                if self._on_debug_info:
+                    rect = None
+                    if marker:
+                        x, y, w, h = marker[1]
+                        rect = (screen_region[0] + x, screen_region[1] + y, w, h)
+                    self._on_debug_info(combo.id, marker is not None,
+                                        position if position is not None else 0.0, rect)
+                self._interruptible_sleep_event(0.04, stop_event)
+        finally:
+            if held:
+                input_controller.release_mouse(button)
+            self._notify_triggered(combo.id, False)
+
     def _wait_until_stopped(self, stop_event: threading.Event):
         while not stop_event.is_set() and not self._stop_event.is_set():
             time.sleep(0.05)
@@ -374,7 +455,7 @@ class HookEngine:
         while elapsed < seconds:
             if stop_event.is_set() or self._stop_event.is_set():
                 return
-            time.sleep(step)
+            time.sleep(min(step, seconds - elapsed))
             elapsed += step
 
     def _notify_triggered(self, combo_id: str, active: bool):

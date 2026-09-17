@@ -12,6 +12,12 @@ pyautogui.PAUSE = 0
 
 # ── 滑鼠操作 ─────────────────────────────────────────────
 
+
+def release_mouse(button: str = "left"):
+    """釋放已按住的滑鼠，即使游標在 fail-safe 角落。"""
+    x, y = pyautogui.position()
+    pyautogui.platformModule._mouseUp(x, y, button)
+
 def mouse_click(button: str = "left", delay_min: float = 0, delay_max: float = 0, stop_event=None):
     """單擊滑鼠"""
     if delay_max > 0:
