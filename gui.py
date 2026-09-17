@@ -153,20 +153,24 @@ class App:
         tk.Button(window_row, text="重新整理", command=self._refresh_windows).pack(side="left")
         tk.Label(frm_region, text="選視窗後忽略 XY 並自動跟隨；需保持可見。最小化／關閉會停止。",
                  fg="#666666").pack(anchor="w")
-        self._refresh_windows()
-
         grid = tk.Frame(frm_region)
         grid.pack(fill="x")
         labels = ["X:", "Y:", "寬:", "高:"]
         self.region_vars: list[tk.StringVar] = []
+        self.region_controls: list[tk.Widget] = []
         for i, lbl in enumerate(labels):
             tk.Label(grid, text=lbl).grid(row=0, column=i * 2, sticky="e")
             var = tk.StringVar()
-            tk.Entry(grid, textvariable=var, width=7).grid(row=0, column=i * 2 + 1, padx=2)
+            entry = tk.Entry(grid, textvariable=var, width=7)
+            entry.grid(row=0, column=i * 2 + 1, padx=2)
+            self.region_controls.append(entry)
             self.region_vars.append(var)
-        tk.Button(
+        select_button = tk.Button(
             grid, text="框選", command=self._select_region,
-        ).grid(row=0, column=8, padx=(8, 0))
+        )
+        select_button.grid(row=0, column=8, padx=(8, 0))
+        self.region_controls.append(select_button)
+        self._refresh_windows()
 
         # --- 狀態列 ---
         frm_status = tk.Frame(self.root, padx=10, pady=5)
@@ -308,6 +312,12 @@ class App:
                 selected = len(values) - 1
         self.cmb_window["values"] = values
         self.cmb_window.current(selected)
+        self._update_region_controls()
+
+    def _update_region_controls(self):
+        state = "disabled" if self.profile.window_title else "normal"
+        for control in self.region_controls:
+            control.config(state=state)
 
     def _on_window_selected(self, event=None):
         if self.engine.running:
@@ -320,6 +330,7 @@ class App:
             hwnd, title, pid = self._windows[index - 1]
             self.profile.window_title = title
             self.profile.window_handle, self.profile.window_pid = hwnd, pid
+        self._update_region_controls()
 
     def _select_region(self):
         """隱藏主視窗 → 全螢幕框選 → 填入座標"""
