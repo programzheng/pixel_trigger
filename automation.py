@@ -6,6 +6,7 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime
 
 import input_controller
@@ -35,6 +36,7 @@ class HookEngine:
         # combo_id → while_visible 動作 thread
         self._active_actions: dict[str, threading.Thread] = {}
         self._action_stop_events: dict[str, threading.Event] = {}
+        self._mouse_locks = {button: threading.Lock() for button in ("left", "right", "middle")}
 
         self.cycle_count = 0
 
@@ -87,14 +89,6 @@ class HookEngine:
                     raise ValueError("請在觸發圖片內框選局部區域，保留部分圖片供定位使用。")
             if combo.action.action_type != ActionType.HOLD_MOUSE:
                 raise ValueError("位置控制需使用滑鼠長按。")
-            for other in self._profile.combos:
-                if (other.enabled and other.id != combo.id
-                        and (other.image_path or other.verify_text
-                             or other.trigger == TriggerMode.POSITION_CONTROL)
-                        and other.action.action_type in (ActionType.CLICK, ActionType.CLICK_IMAGE, ActionType.RAPID_CLICK,
-                                                        ActionType.HOLD_MOUSE)
-                        and other.action.mouse_button == combo.action.mouse_button):
-                    raise ValueError("位置控制的滑鼠鍵不能同時由其他啟用的 Combo 操作。")
         self._running = True
         self._stop_event.clear()
         self.cycle_count = 0
@@ -298,6 +292,29 @@ class HookEngine:
 
     def _execute_action_once(self, combo: Combo):
         """執行一次性動作（on_appear 用）"""
+        with self._mouse_action(combo, self._stop_event) as acquired:
+            if acquired:
+                self._execute_action_once_unlocked(combo)
+
+    @contextmanager
+    def _mouse_action(self, combo: Combo, stop_event: threading.Event):
+        if combo.action.action_type not in (ActionType.CLICK, ActionType.CLICK_IMAGE,
+                                           ActionType.RAPID_CLICK, ActionType.HOLD_MOUSE):
+            yield True
+            return
+        lock = self._mouse_locks[combo.action.mouse_button.value]
+        while not stop_event.is_set() and not self._stop_event.is_set():
+            if lock.acquire(timeout=0.05):
+                break
+        else:
+            yield False
+            return
+        try:
+            yield not stop_event.is_set() and not self._stop_event.is_set()
+        finally:
+            lock.release()
+
+    def _execute_action_once_unlocked(self, combo: Combo):
         action = combo.action
         at = action.action_type
         print(f"[{datetime.now():%Y%m%d %H:%M:%S}][action] '{combo.name}' → {at.value}")
@@ -407,11 +424,14 @@ class HookEngine:
             import pyautogui
             btn = action.mouse_button.value
             while not stop_event.is_set() and not self._stop_event.is_set():
-                pyautogui.mouseDown(button=btn)
-                try:
-                    self._interruptible_sleep_event(action.duration, stop_event)
-                finally:
-                    pyautogui.mouseUp(button=btn)
+                with self._mouse_action(combo, stop_event) as acquired:
+                    if not acquired:
+                        break
+                    try:
+                        pyautogui.mouseDown(button=btn)
+                        self._interruptible_sleep_event(action.duration, stop_event)
+                    finally:
+                        input_controller.release_mouse(btn)
                 if stop_event.is_set() or self._stop_event.is_set():
                     break
                 gap = random.uniform(action.interval_min, action.interval_max)
@@ -433,39 +453,48 @@ class HookEngine:
             return
 
         while not stop_event.is_set() and not self._stop_event.is_set():
-            if at == ActionType.CLICK:
-                input_controller.mouse_click(
-                    action.mouse_button.value, action.delay_min, action.delay_max, stop_event
-                )
-            elif at == ActionType.CLICK_IMAGE:
-                self._click_target_image(combo, stop_event)
-            elif at == ActionType.RAPID_CLICK:
-                input_controller.mouse_rapid_click(
-                    action.mouse_button.value,
-                    duration=0.5,
-                    interval_min=action.interval_min,
-                    interval_max=action.interval_max,
-                    stop_event=stop_event,
-                )
-            elif at == ActionType.KEY_PRESS:
-                input_controller.key_press(
-                    action.key, action.delay_min, action.delay_max, stop_event
-                )
-            elif at == ActionType.RAPID_KEY:
-                input_controller.key_rapid_press(
-                    action.key,
-                    duration=0.5,
-                    interval_min=action.interval_min,
-                    interval_max=action.interval_max,
-                    stop_event=stop_event,
-                )
+            with self._mouse_action(combo, stop_event) as acquired:
+                if not acquired:
+                    break
+                self._repeat_action(combo, stop_event)
 
             if not stop_event.is_set():
                 time.sleep(0.02)
 
+    def _repeat_action(self, combo: Combo, stop_event: threading.Event):
+        action = combo.action
+        at = action.action_type
+        if at == ActionType.CLICK:
+            input_controller.mouse_click(
+                action.mouse_button.value, action.delay_min, action.delay_max, stop_event
+            )
+        elif at == ActionType.CLICK_IMAGE:
+            self._click_target_image(combo, stop_event)
+        elif at == ActionType.RAPID_CLICK:
+            input_controller.mouse_rapid_click(
+                action.mouse_button.value,
+                duration=0.5,
+                interval_min=action.interval_min,
+                interval_max=action.interval_max,
+                stop_event=stop_event,
+            )
+        elif at == ActionType.KEY_PRESS:
+            input_controller.key_press(
+                action.key, action.delay_min, action.delay_max, stop_event
+            )
+        elif at == ActionType.RAPID_KEY:
+            input_controller.key_rapid_press(
+                action.key,
+                duration=0.5,
+                interval_min=action.interval_min,
+                interval_max=action.interval_max,
+                stop_event=stop_event,
+            )
+
     def _position_control_loop(self, combo: Combo, stop_event: threading.Event):
         settings = combo.position_control
         button = combo.action.mouse_button.value
+        lock = self._mouse_locks[button]
         held = False
         try:
             while not stop_event.is_set() and not self._stop_event.is_set():
@@ -487,11 +516,15 @@ class HookEngine:
                     break
                 if should_hold != held:
                     if should_hold:
-                        held = True
-                        input_controller.pyautogui.mouseDown(button=button)
+                        if lock.acquire(blocking=False):
+                            held = True
+                            input_controller.pyautogui.mouseDown(button=button)
                     else:
-                        input_controller.release_mouse(button)
-                        held = False
+                        try:
+                            input_controller.release_mouse(button)
+                        finally:
+                            held = False
+                            lock.release()
                     self._notify_triggered(combo.id, held)
                 if self._on_debug_info:
                     rect = None
@@ -503,7 +536,10 @@ class HookEngine:
                 self._interruptible_sleep_event(0.04, stop_event)
         finally:
             if held:
-                input_controller.release_mouse(button)
+                try:
+                    input_controller.release_mouse(button)
+                finally:
+                    lock.release()
             self._notify_triggered(combo.id, False)
 
     def _wait_until_stopped(self, stop_event: threading.Event):
