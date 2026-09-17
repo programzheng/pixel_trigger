@@ -12,6 +12,35 @@ from models import Combo, Profile
 
 
 class MultiScaleMatchTest(unittest.TestCase):
+    def test_threshold_only_changes_acceptance_not_search_or_refinement(self):
+        template = np.random.default_rng(31).integers(30, 230, (20, 20), dtype=np.uint8)
+        frame = np.zeros((100, 100), dtype=np.uint8)
+        for cached in (False, True):
+            searches = []
+            for threshold in (0.4, 0.5, 0.9):
+                capture = ScreenCapture()
+                capture._cache["gauge"] = (template, 20, 20, None)
+                if cached:
+                    capture._last_matches["gauge"] = (None, (0, 0), (20, 20), 1.0)
+
+                def best(frame, resized, mask):
+                    return (0.43, (0, 0)) if resized.shape == (20, 20) else (0.7, (7, 9))
+
+                def refine(frame, template, mask, match, stop):
+                    return ((0.43, (0, 0), (20, 20), 1.0) if match[0] == 0
+                            else (0.72, (7, 9), (30, 30), 1.5))
+
+                with patch("screen_capture.MATCH_SCALES", (1.0, 1.5)), \
+                        patch("screen_capture._best_template_match", side_effect=best) as search, \
+                        patch("screen_capture._refine_template_match", side_effect=refine) as fine:
+                    found, score, center = capture.match_template(frame, "gauge", threshold)
+                self.assertEqual(score, 0.72)
+                self.assertEqual(found, threshold <= 0.72)
+                self.assertEqual(center, (22, 24) if found else None)
+                self.assertEqual(fine.call_count, 2 if cached else 1)
+                searches.append([call.args[1].shape for call in search.call_args_list])
+            self.assertEqual(searches, [[(20, 20), (30, 30)]] * 3)
+
     def test_fine_scale_and_small_size_change_reuse_original_template(self):
         template = np.full((128, 48), 20, dtype=np.uint8)
         cv2.rectangle(template, (9, 4), (38, 85), 210, -1)
@@ -51,7 +80,8 @@ class MultiScaleMatchTest(unittest.TestCase):
                 for _ in range(len(MATCH_SCALES)):
                     with patch("screen_capture.cv2.matchTemplate", wraps=cv2.matchTemplate) as match:
                         found, _, _ = capture.match_template(frame, path, 0.999, scale_limit=1)
-                        self.assertLessEqual(match.call_count, 14)
+                        # 上次位置細調 11 次 + 本輪最多 3 個比例 + 最佳候選細調 11 次。
+                        self.assertLessEqual(match.call_count, 25)
                     if found:
                         break
                 self.assertTrue(found)
@@ -118,7 +148,7 @@ class MultiScaleMatchTest(unittest.TestCase):
                            wraps=cv2.matchTemplate) as match:
                     self.assertTrue(capture.match_template(frame, path, 0.95)[0])
                     self.assertGreater(match.call_count, 1)
-                # 輕微畫面變化仍應只測試記住的比例，不必達到 0.999 分。
+                # 輕微畫面變化仍達固定的 0.999 信心門檻，可沿用記住的比例。
                 frame[5, 7] = 255 - frame[5, 7]
                 with patch("screen_capture.cv2.matchTemplate",
                            wraps=cv2.matchTemplate) as match:

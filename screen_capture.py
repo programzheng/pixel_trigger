@@ -180,7 +180,7 @@ class ScreenCapture:
         scale_limit: int | None = None,
         stop_event=None,
     ) -> tuple[bool, float, tuple[int, int] | None]:
-        """先比對記住的比例（預設原尺寸），失敗才搜尋並記住新比例。
+        """搜尋採用固定信心門檻，使用者閾值只決定最後是否通過。
         回傳 (是否偵測到, 信心度, 螢幕絕對座標中心點 | None)
         """
         if not hasattr(self._match_state, "sizes"):
@@ -212,7 +212,7 @@ class ScreenCapture:
             self._scale_offsets[image_path] = (offset + len(fallback_scales)) % (len(MATCH_SCALES) - 1)
         search_frame = None
         search_ratio = min(1.0, 960 / max(fw, fh))
-        scales = () if best_conf >= threshold else (preferred_scale, 1.0) + fallback_scales
+        scales = () if best_conf >= 0.999 else (preferred_scale, 1.0) + fallback_scales
         for scale in scales:
             if stop_event is not None and stop_event.is_set():
                 return False, 0.0, None
@@ -258,12 +258,12 @@ class ScreenCapture:
             if confidence > best_conf:
                 best_conf, best_loc, best_size = confidence, loc, (w, h)
                 best_scale = scale
-            # 記住的比例或原尺寸符合就沿用，其餘比例選最高分。
-            if (scale in (preferred_scale, 1.0) and confidence >= threshold) or confidence >= 0.999:
+            # 只有近乎完全匹配才提早停止，避免低閾值採用不準確的位置。
+            if confidence >= 0.999:
                 break
 
         # 近似匹配也細調，避免 5% 間隔剛好跳過小圖示的正確尺寸。
-        if scales and best_loc is not None and max(0.5, threshold - 0.2) <= best_conf < 0.999:
+        if scales and best_loc is not None and 0.5 <= best_conf < 0.999:
             best_conf, best_loc, best_size, best_scale = _refine_template_match(
                 frame, template, mask, (best_conf, best_loc, best_size, best_scale), stop_event)
         if stop_event is not None and stop_event.is_set():
