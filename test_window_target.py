@@ -1,6 +1,7 @@
 import threading
 import tkinter as tk
 import unittest
+import ttkbootstrap as ttk
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -12,6 +13,10 @@ from window_target import get_window_region, list_windows
 
 
 class WindowTargetTest(unittest.TestCase):
+    def setUp(self):
+        # Styles belong to the Tcl interpreter created by each test.
+        ttk.Style.instance = None
+
     def test_real_window_tracks_geometry_and_rejects_hidden_or_wrong_process(self):
         root = tk.Tk()
         root.title("PixelTrigger window target test")
@@ -75,21 +80,21 @@ class WindowTargetTest(unittest.TestCase):
             app = App()
         app.root.withdraw()
         try:
-            self.assertTrue(all(c.cget("state") == "normal" for c in app.region_controls))
+            self.assertTrue(all(str(c.cget("state")) == "normal" for c in app.region_controls))
             app.cmb_window.current(2)
             app._on_window_selected()
-            self.assertTrue(all(c.cget("state") == "disabled" for c in app.region_controls))
+            self.assertTrue(all(str(c.cget("state")) == "disabled" for c in app.region_controls))
             self.assertEqual((app.profile.window_handle, app.profile.window_pid), (11, 21))
             app._sync_region_from_ui()
             self.assertEqual(app.profile.window_title, "Game")
             app.cmb_window.current(0)
             app._on_window_selected()
             self.assertEqual(app.profile.window_title, "")
-            self.assertTrue(all(c.cget("state") == "normal" for c in app.region_controls))
+            self.assertTrue(all(str(c.cget("state")) == "normal" for c in app.region_controls))
             app.profile = restored
             with patch("gui.list_windows", return_value=[]):
                 app._sync_region_to_ui()
-            self.assertTrue(all(c.cget("state") == "disabled" for c in app.region_controls))
+            self.assertTrue(all(str(c.cget("state")) == "disabled" for c in app.region_controls))
         finally:
             app.root.destroy()
 

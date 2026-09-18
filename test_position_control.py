@@ -2,6 +2,7 @@ import json
 import tempfile
 import threading
 import unittest
+import ttkbootstrap as ttk
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,6 +21,7 @@ from screen_capture import ScreenCapture, find_color_marker
 
 class PositionControlTest(unittest.TestCase):
     def setUp(self):
+        ttk.Style.instance = None
         self.settings = PositionControl(region_space="screen", region=(10, 20, 101, 40))
         self.combo = Combo(trigger=TriggerMode.POSITION_CONTROL,
                            action=Action(action_type=ActionType.HOLD_MOUSE),

@@ -23,6 +23,8 @@ class BuildModeTest(unittest.TestCase):
                 self.assertIn("--standalone" if standalone else "--onefile", command)
                 self.assertNotIn("--onefile" if standalone else "--standalone", command)
                 self.assertIn("--include-data-dir=models=models", command)
+                self.assertIn("--include-package=ttkbootstrap", command)
+                self.assertIn("--include-package-data=ttkbootstrap", command)
                 target = "dist/standalone/main.dist/pixel_trigger.exe" if standalone else "dist/pixel_trigger.exe"
                 self.assertIn(target, output.getvalue())
                 self.assertIn("耗時", output.getvalue())
@@ -43,7 +45,7 @@ class BuildModeTest(unittest.TestCase):
             runpy.run_path(str(script), run_name="__main__")
         command = run.call_args.args[0]
         self.assertEqual(command[1:3], ["-m", "PyInstaller"])
-        for option in ("--onedir", "--contents-directory=.", "--collect-all=easyocr"):
+        for option in ("--onedir", "--contents-directory=.", "--collect-all=easyocr", "--collect-all=ttkbootstrap"):
             self.assertIn(option, command)
         for directory in ("models", "profiles", "templates"):
             self.assertIn(f"--add-data={script.resolve().parent / directory}:{directory}", command)

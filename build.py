@@ -29,6 +29,8 @@ NUITKA_ARGS = [
     # 保留動態載入的 OCR 模型和圖片格式；一般 import 由 Nuitka 追蹤。
     "--include-package=easyocr",
     "--include-package=PIL",
+    "--include-package=ttkbootstrap",
+    "--include-package-data=ttkbootstrap",
     # 包含資料目錄
     "--include-data-dir=templates=templates",
     "--include-data-dir=profiles=profiles",
@@ -50,6 +52,7 @@ PYINSTALLER_ARGS = [
     "--workpath=dist/pyinstaller-build",
     "--specpath=dist/pyinstaller-build",
     "--collect-all=easyocr",
+    "--collect-all=ttkbootstrap",
     f"--add-data={PROJECT_DIR / 'models'}:models",
     f"--add-data={PROJECT_DIR / 'profiles'}:profiles",
     f"--add-data={PROJECT_DIR / 'templates'}:templates",

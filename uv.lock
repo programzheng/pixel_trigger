@@ -607,6 +607,7 @@ dependencies = [
     { name = "opencv-python" },
     { name = "pillow" },
     { name = "pyautogui" },
+    { name = "ttkbootstrap" },
 ]
 
 [package.dev-dependencies]
@@ -626,6 +627,7 @@ requires-dist = [
     { name = "opencv-python", specifier = ">=4.8.0" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
+    { name = "ttkbootstrap", specifier = ">=1.20,<2" },
 ]
 
 [package.metadata.requires-dev]
@@ -3878,6 +3880,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/35/f8/9c66bfc55361ec6d0e4040a0337fb5924ceb23de4648b8a81ae9d33b2b38/triton-3.6.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d002e07d7180fd65e622134fbd980c9a3d4211fb85224b56a0a0efbd422ab72f", size = 188400296 },
     { url = "https://files.pythonhosted.org/packages/df/3d/9e7eee57b37c80cec63322c0231bb6da3cfe535a91d7a4d64896fcb89357/triton-3.6.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a17a5d5985f0ac494ed8a8e54568f092f7057ef60e1b0fa09d3fd1512064e803", size = 188273063 },
     { url = "https://files.pythonhosted.org/packages/f6/56/6113c23ff46c00aae423333eb58b3e60bdfe9179d542781955a5e1514cb3/triton-3.6.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:46bd1c1af4b6704e554cad2eeb3b0a6513a980d470ccfa63189737340c7746a7", size = 188397994 },
+]
+
+[[package]]
+name = "ttkbootstrap"
+version = "1.20.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c3/af/a4ee7b8b4e198a94f1e68c871c239e5300857f040918fb20be47e4b0c8c7/ttkbootstrap-1.20.4.tar.gz", hash = "sha256:9dbea392231f9b977e94d753fc1acf12f3cf2324fcb996b2b4e0d0801b637161", size = 176612 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/21/37/b2c3c8729be2d46ab41fde2f821fbf8ea526d9d0eaacad1e9a04a33ae67a/ttkbootstrap-1.20.4-py3-none-any.whl", hash = "sha256:47629f1fcd498231f766516ba77f3e2b07ee2fbdedb3ccb6e5a79500ad573b97", size = 191716 },
 ]
 
 [[package]]
