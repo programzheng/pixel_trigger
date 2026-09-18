@@ -361,6 +361,47 @@ class ScreenCapture:
 
     # ── OCR 文字驗證 ──────────────────────────────────────
 
+    def read_balance(self, combo, frame, region=None):
+        """Locate a fixed icon, then OCR its scaled relative number region."""
+        from calc import parse_balance
+
+        found, score, pos = self.match_template(
+            frame, combo.image_path, combo.match_threshold, region)
+        self._match_state.balance_debug = (found, score, None, None)
+        if not found or pos is None:
+            return None, "找不到定位圖片", 0.0, None
+        mw, mh = self.get_match_size(combo.image_path)
+        tw, th = self.get_template_size(combo.image_path)
+        dx, dy, width, height = combo.calc_region
+        sx, sy = mw / tw, mh / th
+        ox, oy = region[:2] if region else (0, 0)
+        x = pos[0] - mw // 2 - ox + round(dx * sx)
+        y = pos[1] - mh // 2 - oy + round(dy * sy)
+        width, height = max(1, round(width * sx)), max(1, round(height * sy))
+        self._match_state.balance_debug = (
+            True, score, (pos[0] - mw // 2, pos[1] - mh // 2, mw, mh),
+            (x + ox, y + oy, width, height),
+        )
+        if x < 0 or y < 0 or x + width > frame.shape[1] or y + height > frame.shape[0]:
+            return None, "數字區域超出擷取範圍", 0.0, None
+        roi = frame[y:y + height, x:x + width]
+        enlarged = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        with self._ocr_lock:
+            self._ensure_ocr()
+            results = self._ocr_reader.readtext(enlarged, allowlist="0123456789,")
+        text = " | ".join(item[1] for item in results)
+        confidence = float(results[0][2]) if len(results) == 1 else 0.0
+        if len(results) != 1 or confidence < combo.text_threshold:
+            return None, text or "OCR 無有效數字", confidence, roi
+        try:
+            value = parse_balance(text)
+        except ValueError:
+            return None, text, confidence, roi
+        return value, text, confidence, roi
+
+    def get_balance_debug(self):
+        return getattr(self._match_state, "balance_debug", (False, 0.0, None, None))
+
     def _ensure_ocr(self):
         """Lazy-load easyocr Reader（首次呼叫時約需數秒）"""
         if self._ocr_reader is None:

@@ -180,6 +180,10 @@ class Combo:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     name: str = "新組合"
     enabled: bool = True
+    detection_mode: str = "active"
+    calc_region: tuple[int, int, int, int] | None = None
+    daily_limit: int = 999
+    warning_ratio: float = 0.9
 
     # 圖片偵測
     image_path: str = ""           # 模板圖片路徑
@@ -209,6 +213,10 @@ class Combo:
             "action": self.action.to_dict(),
         }
         # 只在有設定時才寫入，保持 JSON 簡潔
+        if self.detection_mode == "background":
+            d.update(detection_mode=self.detection_mode, calc_region=self.calc_region,
+                     daily_limit=self.daily_limit, warning_ratio=self.warning_ratio,
+                     text_threshold=self.text_threshold)
         if self.trigger.tracks_marker:
             d["position_control"] = self.position_control.to_dict()
         if self.verify_text:
@@ -224,6 +232,10 @@ class Combo:
             id=d.get("id", uuid.uuid4().hex[:8]),
             name=d.get("name", "新組合"),
             enabled=d.get("enabled", True),
+            detection_mode=d.get("detection_mode", "active"),
+            calc_region=tuple(d["calc_region"]) if d.get("calc_region") else None,
+            daily_limit=d.get("daily_limit", 999),
+            warning_ratio=d.get("warning_ratio", 0.9),
             image_path=d.get("image_path", ""),
             match_threshold=d.get("match_threshold", 0.8),
             verify_text=d.get("verify_text", ""),
@@ -240,6 +252,8 @@ class Combo:
 @dataclass
 class Profile:
     name: str = "預設"
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    background_hotkey: str = "F7"
     scan_region: tuple[int, int, int, int] | None = None
     scan_interval: float = 0.1
     hotkey: str = "F6"
@@ -252,6 +266,8 @@ class Profile:
         region = list(self.scan_region) if self.scan_region else None
         return {
             "name": self.name,
+            "id": self.id,
+            "background_hotkey": self.background_hotkey,
             "scan_region": region,
             "scan_interval": self.scan_interval,
             "hotkey": self.hotkey,
@@ -268,6 +284,8 @@ class Profile:
             region = None
         return cls(
             name=d.get("name", "預設"),
+            id=d.get("id", uuid.uuid4().hex),
+            background_hotkey=d.get("background_hotkey", "F7"),
             scan_region=region,
             scan_interval=d.get("scan_interval", 0.1),
             hotkey=d.get("hotkey", "F6"),

@@ -9,3 +9,4 @@ dist/pyinstaller/
 dist/pyinstaller-build/
 models/
 logs/
+calc/

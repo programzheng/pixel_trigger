@@ -57,3 +57,19 @@ def get_window_region(hwnd: int, pid: int) -> tuple[int, int, int, int] | None:
         return None
     width, height = rect.right - rect.left, rect.bottom - rect.top
     return (origin.x, origin.y, width, height) if min(width, height) > 0 else None
+
+
+def capture_region(profile):
+    """Resolve the configured capture scope; unavailable windows never mean full screen."""
+    if not profile.window_title:
+        region = profile.scan_region
+        if region is not None and (len(region) != 4
+                or any(type(v) is not int for v in region) or min(region[2:]) <= 0):
+            raise ValueError("偵測範圍必須是整數 X、Y 與正整數寬高。")
+        return region
+    if not profile.window_handle:
+        matches = [(h, p) for h, title, p in list_windows() if title == profile.window_title]
+        if len(matches) != 1:
+            raise ValueError("目標視窗不存在或有同名視窗，請重新選擇。")
+        profile.window_handle, profile.window_pid = matches[0]
+    return get_window_region(profile.window_handle, profile.window_pid)
