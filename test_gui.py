@@ -256,7 +256,7 @@ class ComboScaleDisplayTest(unittest.TestCase):
                 app._on_debug_info(combo.id, False, 0.2, None)
                 app._on_cycle_complete(1)
                 app._poll_queue()
-                self.assertEqual(app.lbl_cycles.cget("text"), "掃描: 1 次")
+                self.assertEqual(app.lbl_cycles.cget("text"), "主動掃描: 1 次")
                 self.assertEqual(app.tree.set(combo.id, "scale"), "75.0%")
                 self.assertEqual(app.tree.set(combo.id, "status"), "0.20 X")
                 app._refresh_combo_tree()

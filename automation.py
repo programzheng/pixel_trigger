@@ -86,17 +86,17 @@ class HookEngine:
             if get_window_region(profile.window_handle, profile.window_pid) is None:
                 raise ValueError("目標視窗不可用，請還原視窗或重新選擇。")
         for combo in profile.combos:
-            if combo.enabled and combo.action.action_type == ActionType.PLAY_SOUND:
+            if combo.enabled and combo.detection_mode == "active" and combo.action.action_type == ActionType.PLAY_SOUND:
                 if not 0 <= combo.action.delay_min <= combo.action.delay_max < float("inf"):
                     raise ValueError("音效延遲必須是有限非負數，且最小值不能大於最大值。")
-            if combo.enabled and combo.action.action_type == ActionType.CLICK_IMAGE:
+            if combo.enabled and combo.detection_mode == "active" and combo.action.action_type == ActionType.CLICK_IMAGE:
                 action = combo.action
                 if not 0 <= action.target_threshold <= 1:
                     raise ValueError("點擊目標的圖片閾值必須介於 0~1。")
                 if not self._capture.load_template(action.target_image_path):
                     raise ValueError("請指定有效的點擊目標圖片。")
         positions = [c for c in self._profile.combos
-                     if c.enabled and c.trigger.tracks_marker]
+                     if c.enabled and c.detection_mode == "active" and c.trigger.tracks_marker]
         for combo in positions:
             combo.position_control.validate()
             if combo.position_control.region_space == "template":
@@ -119,7 +119,7 @@ class HookEngine:
         self._stop_event.clear()
         self._last_logs.clear()
         for combo in profile.combos:
-            if combo.enabled:
+            if combo.enabled and combo.detection_mode == "active":
                 self._log(combo, "開始偵測", category="lifecycle")
         self.cycle_count = 0
         self._prev_visible = {c.id: False for c in self._profile.combos}
@@ -151,7 +151,7 @@ class HookEngine:
         workers = {}
         try:
             for combo in self._profile.combos:
-                if combo.enabled and combo.trigger.tracks_marker:
+                if combo.enabled and combo.detection_mode == "active" and combo.trigger.tracks_marker:
                     self._start_continuous_action(combo)
             with ThreadPoolExecutor(max_workers=max(1, len(self._profile.combos))) as pool:
                 try:
@@ -161,7 +161,7 @@ class HookEngine:
         finally:
             self._stop_event.set()
             for combo in self._profile.combos:
-                if combo.enabled:
+                if combo.enabled and combo.detection_mode == "active":
                     self._log(combo, "偵測已停止", category="lifecycle")
             for evt in list(self._action_stop_events.values()):
                 evt.set()
@@ -182,7 +182,7 @@ class HookEngine:
 
             enabled_combos = [
                 c for c in profile.combos
-                if c.enabled and not c.trigger.tracks_marker
+                if c.enabled and c.detection_mode == "active" and not c.trigger.tracks_marker
                 and (c.image_path or c.verify_text)
             ]
 
@@ -225,7 +225,7 @@ class HookEngine:
             region = get_window_region(profile.window_handle, profile.window_pid)
             if region is None:
                 for combo in profile.combos:
-                    if combo.enabled:
+                    if combo.enabled and combo.detection_mode == "active":
                         self._log(combo, "目標視窗不可用（最小化／關閉等），停止偵測", category="lifecycle", level="error")
                 self._stop_event.set()
                 for event in list(self._action_stop_events.values()):
@@ -237,6 +237,8 @@ class HookEngine:
         self, combo: Combo, frame, region: tuple[int, int, int, int] | None
     ):
         """處理單一 Combo 的偵測與觸發"""
+        if combo.detection_mode != "active":
+            return
         if self._stop_event.is_set():
             return
         text_conf = 0.0
