@@ -25,6 +25,7 @@ class HookEngine:
         on_cycle_complete=None,    # callback(cycle_count: int)
         on_status_change=None,     # callback(running: bool)
         on_debug_info=None,        # callback(combo_id: str, found: bool, confidence: float)
+        on_log=None,               # callback(combo_id: str, message: str, level: str)
     ):
         self._profile: Profile | None = None
         self._running = False
@@ -45,6 +46,20 @@ class HookEngine:
         self._on_cycle_complete = on_cycle_complete
         self._on_status_change = on_status_change
         self._on_debug_info = on_debug_info
+        self._on_log = on_log
+        self._last_logs = {}
+
+    def _log(self, combo, reason, detail="", category="condition", level="info"):
+        if self._on_log is None:
+            return
+        now = time.monotonic()
+        key = (combo.id, category)
+        previous = self._last_logs.get(key)
+        # 同一條件每秒更新一次數值；原因切換立即記錄。
+        if previous and previous[0] == reason and now - previous[1] < 1:
+            return
+        self._last_logs[key] = (reason, now)
+        self._on_log(combo.id, f"[{combo.trigger.value}] {reason} {detail}".rstrip(), level)
 
     @property
     def running(self) -> bool:
@@ -99,6 +114,10 @@ class HookEngine:
                     raise ValueError("請指定有效的鍵盤按鍵。")
         self._running = True
         self._stop_event.clear()
+        self._last_logs.clear()
+        for combo in profile.combos:
+            if combo.enabled:
+                self._log(combo, "開始偵測", category="lifecycle")
         self.cycle_count = 0
         self._prev_visible = {c.id: False for c in self._profile.combos}
         self._thread = threading.Thread(target=self._scan_loop, daemon=True)
@@ -138,6 +157,9 @@ class HookEngine:
                     self._stop_event.set()
         finally:
             self._stop_event.set()
+            for combo in self._profile.combos:
+                if combo.enabled:
+                    self._log(combo, "偵測已停止", category="lifecycle")
             for evt in list(self._action_stop_events.values()):
                 evt.set()
             for thread in list(self._active_actions.values()):
@@ -167,6 +189,8 @@ class HookEngine:
                 break
             frame = self._capture.grab_frame(region)
             if frame is None:
+                for combo in enabled_combos:
+                    self._log(combo, "截圖失敗", level="failure")
                 self._interruptible_sleep(0.5)
                 continue
 
@@ -177,7 +201,11 @@ class HookEngine:
                 if worker is not None and not worker.done():
                     continue
                 if worker is not None:
-                    worker.result()  # 讓執行錯誤顯示在終端機，不留下假的活躍狀態。
+                    try:
+                        worker.result()
+                    except Exception as e:
+                        self._log(combo, "偵測／動作錯誤", str(e), category="error", level="error")
+                        raise
                 workers[combo.id] = pool.submit(self._process_combo, combo, frame, region)
 
             self.cycle_count += 1
@@ -193,6 +221,9 @@ class HookEngine:
         if profile.window_title:
             region = get_window_region(profile.window_handle, profile.window_pid)
             if region is None:
+                for combo in profile.combos:
+                    if combo.enabled:
+                        self._log(combo, "目標視窗不可用（最小化／關閉等），停止偵測", category="lifecycle", level="error")
                 self._stop_event.set()
                 for event in list(self._action_stop_events.values()):
                     event.set()
@@ -208,6 +239,7 @@ class HookEngine:
         text_conf = 0.0
         confidence = 0.0
         match_rect = None
+        reason = ""
 
         if not combo.image_path and combo.verify_text:
             # ── 純 OCR 模式：無觸發圖片，直接對整個 frame 做 OCR ──
@@ -224,12 +256,14 @@ class HookEngine:
                     f"[{datetime.now():%Y%m%d %H:%M:%S}][ocr] '{combo.name}' "
                     f"文字偵測到! text_conf={text_conf:.3f}"
                 )
+            reason = "OCR 通過" if text_ok else "OCR 未通過"
         else:
             # ── 圖片比對模式 ──
             found, confidence, pos = self._capture.match_template(
                 frame, combo.image_path, combo.match_threshold, region,
                 scale_limit=1, stop_event=self._stop_event,
             )
+            reason = "圖片通過" if found else "圖片定位未通過"
 
             # 文字驗證（圖片匹配成功 + 有設定 verify_text 時才執行 OCR）
             if found and combo.verify_text and pos:
@@ -255,6 +289,7 @@ class HookEngine:
                             f"圖片匹配但文字不符 text_conf={text_conf:.3f} "
                             f"detected='{detected_text}'"
                         )
+                    reason = "圖片與 OCR 通過" if text_ok else "圖片通過但 OCR 未通過"
 
             # 計算螢幕絕對座標框線（供 debug overlay 使用）
             if pos and combo.image_path:
@@ -270,6 +305,14 @@ class HookEngine:
         if self._profile and self._profile.window_title and self._scan_region() != region:
             return
         self._prev_visible[combo.id] = found
+        detail = f"圖片分數={confidence:.3f}／閾值={combo.match_threshold:.3f}" if combo.image_path else ""
+        if combo.verify_text:
+            detail += f" OCR分數={text_conf:.3f}／閾值={combo.text_threshold:.3f} 文字模式={combo.text_match_mode.value}"
+        if found and combo.trigger == TriggerMode.ON_APPEAR:
+            detail += "；已持續可見，等待消失再觸發" if was_visible else "；首次出現，觸發動作"
+        elif combo.trigger == TriggerMode.WHILE_VISIBLE:
+            detail += "；條件成立，持續動作" if found else "；條件失效，停止動作"
+        self._log(combo, reason, detail, level="info" if found else "failure")
 
         # Debug callback — 每個週期都回報
         if self._on_debug_info:
@@ -326,6 +369,7 @@ class HookEngine:
         stop_event = self._stop_event if stop_event is None else stop_event
         action = combo.action
         at = action.action_type
+        self._log(combo, "執行動作", at.value, category="input")
         print(f"[{datetime.now():%Y%m%d %H:%M:%S}][action] '{combo.name}' → {at.value}")
 
         if at == ActionType.CLICK:
@@ -378,6 +422,8 @@ class HookEngine:
             frame, action.target_image_path, action.target_threshold, region,
             scale_limit=1, stop_event=stop_event,
         )
+        self._log(combo, "點擊目標圖片通過" if found else "點擊目標圖片未通過",
+                  f"分數={_confidence:.3f}／閾值={action.target_threshold:.3f}", category="target", level="info" if found else "failure")
         if (not found or pos is None or stop_event.is_set() or self._stop_event.is_set()
                 or self._scan_region() != region):
             return
@@ -400,7 +446,8 @@ class HookEngine:
     def _run_continuous_action(self, combo: Combo, stop_event: threading.Event):
         try:
             self._continuous_action_loop(combo, stop_event)
-        except Exception:
+        except Exception as e:
+            self._log(combo, "偵測／動作錯誤", str(e), category="error", level="error")
             if combo.trigger.tracks_marker:
                 self._stop_event.set()
             raise
@@ -505,6 +552,7 @@ class HookEngine:
         active = False
         action_stop = threading.Event()
         action_thread = None
+        missing_since = None
         try:
             while not stop_event.is_set() and not self._stop_event.is_set():
                 if not combo.enabled or combo not in self._profile.combos:
@@ -515,14 +563,47 @@ class HookEngine:
                 frame, screen_region = self._capture.position_frame(
                     combo, self._stop_event, scan_region=region)
                 marker = find_color_marker(frame, settings)
+                score = self._capture.get_position_confidence()
+                detail = f"定位分數={score:.3f}／閾值={combo.match_threshold:.3f}"
+                reason = ""
+                if frame is None:
+                    reason = "圖片定位未通過" if score < combo.match_threshold else "追蹤區域無法擷取"
+                elif marker is None:
+                    reason = "找不到唯一箭頭（顏色／面積不符或有多個候選）"
                 position = marker[0][0] / max(1, frame.shape[1] - 1) if marker else None
                 should_run = active
                 if combo.trigger == TriggerMode.COLOR_BAND:
-                    should_run, _ = color_band_state(frame, marker, settings, active)
+                    detected, ratio = color_band_state(frame, marker, settings, active)
+                    should_run = detected
+                    if ratio is None:
+                        now = time.monotonic()
+                        if missing_since is None:
+                            missing_since = now
+                        should_run = active and now - missing_since < settings.band_missing_ms / 1000
+                    else:
+                        missing_since = None
+                    if ratio is None:
+                        reason = reason or "有效色帶取樣不足"
+                        if should_run:
+                            reason += "；漏判容忍中"
+                            remaining = max(0, settings.band_missing_ms - (now - missing_since) * 1000)
+                            detail += f"；漏判容忍中，維持動作，剩餘約 {remaining:.0f} ms"
+                        else:
+                            reason += "；停止／等待"
+                            detail += "；停止／等待，漏判不能啟動動作"
+                    else:
+                        reason = ("色帶達啟動比例" if not active and detected else
+                                  "色帶未達啟動比例" if not active else
+                                  "色帶維持執行" if detected else "色帶達停止比例")
+                        detail += f" 色帶={ratio:.1%}／啟動={settings.band_start:.1%}／停止={settings.band_stop:.1%}"
                 elif position is None or position >= settings.release_at:
                     should_run = False
                 elif position <= settings.press_at:
                     should_run = True
+                if combo.trigger == TriggerMode.POSITION_CONTROL and marker:
+                    reason = "位置啟動" if position <= settings.press_at else "位置停止" if position >= settings.release_at else "位置在界線間，維持原狀"
+                    detail += f" 位置={position:.1%}／啟動={settings.press_at:.1%}／停止={settings.release_at:.1%}；{'執行' if should_run else '等待'}"
+                self._log(combo, reason, detail, level="info" if (detected if combo.trigger == TriggerMode.COLOR_BAND else marker is not None) else "failure")
                 if self._stop_event.is_set() or stop_event.is_set():
                     break
                 if should_run != active:
@@ -542,7 +623,7 @@ class HookEngine:
                     if marker:
                         x, y, w, h = marker[1]
                         rect = (screen_region[0] + x, screen_region[1] + y, w, h)
-                    self._on_debug_info(combo.id, should_run if combo.trigger == TriggerMode.COLOR_BAND else marker is not None,
+                    self._on_debug_info(combo.id, detected if combo.trigger == TriggerMode.COLOR_BAND else marker is not None,
                                         self._capture.get_position_confidence(), rect)
                 self._interruptible_sleep_event(0.04, stop_event)
         finally:
@@ -572,7 +653,8 @@ class HookEngine:
                     break
                 if stop_event.wait(max(0.02, random.uniform(action.interval_min, action.interval_max))):
                     break
-        except Exception:
+        except Exception as e:
+            self._log(combo, "動作錯誤", str(e), category="error", level="error")
             self._stop_event.set()
             raise
 
@@ -591,6 +673,10 @@ class HookEngine:
             elapsed += step
 
     def _notify_triggered(self, combo_id: str, active: bool):
+        if self._profile:
+            combo = next((c for c in self._profile.combos if c.id == combo_id), None)
+            if combo:
+                self._log(combo, "動作開始" if active else "動作結束／取消或等待", category="action")
         if self._on_combo_triggered:
             self._on_combo_triggered(combo_id, active)
 

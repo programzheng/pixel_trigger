@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import os
 import collections
+import logging
+from logging.handlers import TimedRotatingFileHandler
 import time
 import warnings
 import winsound
 import tkinter as tk
+from datetime import datetime
 
 warnings.filterwarnings("ignore", message=".*pin_memory.*")
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -57,6 +60,23 @@ MOUSE_BTN_LABELS = {
 }
 
 
+def _create_log_logger():
+    log_dir = Path.cwd() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger = logging.Logger("pixel_trigger", level=logging.INFO)
+    # 使用本機午夜輪替；backupCount=0 保留歷史檔，不自動刪除。
+    handler = TimedRotatingFileHandler(
+        log_dir / "pixel_trigger.log", when="midnight", interval=1,
+        backupCount=0, encoding="utf-8", delay=True,
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logger.addHandler(handler)
+    return logger
+
+
 class App:
     def __init__(self):
         self.root = tk.Tk()
@@ -66,11 +86,14 @@ class App:
         self.root.attributes("-topmost", True)
 
         self.profile: Profile = Profile()
+        self._file_logger = _create_log_logger()
+        self.root.bind("<Destroy>", self._close_log_files, add="+")
         self.engine = HookEngine(
             on_combo_triggered=self._on_combo_triggered,
             on_cycle_complete=self._on_cycle_complete,
             on_status_change=self._on_status_change,
             on_debug_info=self._on_debug_info,
+            on_log=self._on_log,
         )
 
         # combo 活躍狀態 (用於 GUI 指示燈)
@@ -80,6 +103,8 @@ class App:
         self._sound_enabled = tk.BooleanVar(value=False)
         # combo_id → (found, confidence, match_rect|None) 最新偵測結果
         self._debug_data: dict[str, tuple] = {}
+        self._combo_logs = {}
+        self._log_window = None
         # debug 覆蓋層視窗
         self._debug_overlay: "DebugOverlay | None" = None
 
@@ -143,6 +168,8 @@ class App:
         tk.Button(frm_combo_btns, text="啟用/停用", command=self._toggle_combo_enabled).pack(side="left", padx=2)
         tk.Button(frm_combo_btns, text="▲ 上移", command=self._move_combo_up).pack(side="left", padx=2)
         tk.Button(frm_combo_btns, text="▼ 下移", command=self._move_combo_down).pack(side="left", padx=2)
+        tk.Button(frm_combo_btns, text="Log", command=self._show_combo_log).pack(side="left", padx=2)
+        tk.Button(frm_combo_btns, text="全部 Log", command=self._show_log).pack(side="left", padx=2)
 
         # --- 偵測區域 ---
         frm_region = tk.LabelFrame(self.root, text="偵測區域 (留空=全螢幕)", padx=10, pady=5)
@@ -405,6 +432,121 @@ class App:
         else:
             return f"{label} ({action.key or '?'})"
 
+    def _show_combo_log(self):
+        combo = self._get_selected_combo()
+        if combo:
+            self._show_log(combo.id)
+
+    def _show_log(self, combo_id=None):
+        if self._log_window is None or not self._log_window.winfo_exists():
+            win = tk.Toplevel(self.root)
+            self._log_window = win
+            win.title("Log")
+            win.transient(self.root)
+            win.geometry("1000x500")
+            self._log_all = tk.BooleanVar(win, value=True)
+            self._log_pause = tk.BooleanVar(win, value=False)
+            self._log_filter = tk.StringVar(win, value="全部紀錄")
+            self._log_previous = None
+            self._log_choices = []
+            controls = tk.Frame(win)
+            controls.pack(fill="x", padx=8, pady=5)
+            tk.Checkbutton(controls, text="全部 Combo", variable=self._log_all,
+                           command=self._update_log_view).pack(side="left")
+            filter_box = ttk.Combobox(controls, state="readonly", width=20,
+                textvariable=self._log_filter, values=("全部紀錄", "條件失敗與錯誤", "僅錯誤"))
+            filter_box.pack(side="left", padx=8)
+            filter_box.bind("<<ComboboxSelected>>", lambda e: self._update_log_view())
+            tk.Checkbutton(controls, text="暫停捲動", variable=self._log_pause).pack(side="left")
+            tk.Button(controls, text="複製顯示紀錄", command=self._copy_log).pack(side="right")
+            tk.Button(controls, text="清除全部紀錄", command=self._clear_logs).pack(side="right", padx=5)
+            tk.Label(win, text="左側可多選 Combo；每個 Combo 保留最近 500 筆，依時間合併顯示。",
+                     anchor="w").pack(fill="x", padx=8)
+            tk.Label(win, text=f"檔案：{self._file_logger.handlers[0].baseFilename}\n每天午夜輪替；清除僅影響介面紀錄。",
+                     anchor="w", justify="left", wraplength=950).pack(fill="x", padx=8)
+            body = tk.Frame(win)
+            body.pack(fill="both", expand=True, padx=8, pady=5)
+            self._log_selector = tk.Listbox(body, selectmode="multiple", exportselection=False, width=22)
+            self._log_selector.pack(side="left", fill="y", padx=(0, 8))
+            self._log_selector.bind("<<ListboxSelect>>", self._select_log_combos)
+            self._log_text = tk.Text(body, wrap="word", state="disabled")
+            scroll = tk.Scrollbar(body, command=self._log_text.yview)
+            self._log_text.configure(yscrollcommand=scroll.set)
+            scroll.pack(side="right", fill="y")
+            self._log_text.pack(fill="both", expand=True)
+        self._update_log_view()
+        self._log_all.set(combo_id is None)
+        if combo_id is not None:
+            self._log_selector.selection_clear(0, "end")
+            for index, (cid, _) in enumerate(self._log_choices):
+                if cid == combo_id:
+                    self._log_selector.selection_set(index)
+                    self._log_selector.see(index)
+        self._update_log_view()
+        self._log_window.lift()
+
+    def _select_log_combos(self, event=None):
+        self._log_all.set(False)
+        self._update_log_view()
+
+    def _clear_logs(self):
+        self._combo_logs.clear()
+        self._update_log_view()
+
+    def _copy_log(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self._log_text.get("1.0", "end-1c"))
+
+    def _on_log(self, combo_id, message, level="info"):
+        # Worker 只寫入有上限的 buffer；Tk 元件由 main thread 更新。
+        name = next((c.name for c in self.profile.combos if c.id == combo_id), combo_id)
+        records = self._combo_logs.setdefault(combo_id, collections.deque(maxlen=500))
+        records.append((time.monotonic_ns(), datetime.now().strftime("%H:%M:%S.%f")[:-3],
+                        name, level, message))
+        severity = {"failure": logging.WARNING, "error": logging.ERROR}.get(level, logging.INFO)
+        self._file_logger.log(severity, "[%s] [id=%s] %s", name, combo_id, message)
+
+    def _update_log_view(self):
+        win = getattr(self, "_log_window", None)
+        if win is None or not win.winfo_exists():
+            return
+        selected = {self._log_choices[i][0] for i in self._log_selector.curselection()}
+        choices = {c.id: c.name for c in self.profile.combos}
+        snapshots = [(cid, list(records)) for cid, records in list(self._combo_logs.items())]
+        for cid, records in snapshots:
+            if records:
+                choices.setdefault(cid, records[-1][2])
+        choices = list(choices.items())
+        if choices != self._log_choices:
+            self._log_selector.delete(0, "end")
+            for index, (cid, name) in enumerate(choices):
+                self._log_selector.insert("end", name)
+                if cid in selected:
+                    self._log_selector.selection_set(index)
+            self._log_choices = choices
+        mode = self._log_filter.get()
+        records = [record for cid, items in snapshots
+                   if self._log_all.get() or cid in selected
+                   for record in items
+                   if mode == "全部紀錄" or record[3] == "error"
+                   or (mode == "條件失敗與錯誤" and record[3] == "failure")]
+        records.sort(key=lambda record: record[0])
+        content = "\n".join(f"{stamp} [{name}] [{level}] {message}"
+                            for _, stamp, name, level, message in records)
+        if content == self._log_previous:
+            return
+        text = self._log_text
+        position = text.yview()[0]
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        text.insert("1.0", content)
+        text.configure(state="disabled")
+        if self._log_pause.get():
+            text.yview_moveto(position)
+        else:
+            text.see("end")
+        self._log_previous = content
+
     def _get_selected_combo(self) -> Combo | None:
         sel = self.tree.selection()
         if not sel:
@@ -608,6 +750,7 @@ class App:
         for combo in self.profile.combos:
             if self.tree.exists(combo.id):
                 self.tree.set(combo.id, "scale", self._match_scale_label(combo))
+        self._update_log_view()
         self.root.after(150, self._poll_queue)
 
     # ══════════════════════════════════════════════════════
@@ -616,6 +759,11 @@ class App:
 
     def run(self):
         self.root.mainloop()
+
+    def _close_log_files(self, event):
+        if event.widget == self.root:
+            for handler in self._file_logger.handlers:
+                handler.close()
 
     def on_close(self):
         if self.engine.running:
@@ -1027,6 +1175,7 @@ class ComboEditor:
         self.var_band_start = tk.StringVar(value=f"{settings.band_start * 100:g}")
         self.var_band_stop = tk.StringVar(value=f"{settings.band_stop * 100:g}")
         self.var_band_margin = tk.StringVar(value=str(settings.band_margin))
+        self.var_band_missing_ms = tk.StringVar(value=str(settings.band_missing_ms))
         self.position_only_rows = []
         self.band_only_rows = []
         for label, var in (("標記顏色 (#RRGGBB)", self.var_position_color),
@@ -1039,7 +1188,8 @@ class ComboEditor:
                            ("色帶色相容差 (0~90)", self.var_band_tolerance),
                            ("啟動色帶比例 (%)", self.var_band_start),
                            ("停止色帶比例 (%)", self.var_band_stop),
-                           ("取樣範圍 (箭頭倍數)", self.var_band_margin)):
+                           ("取樣範圍 (箭頭倍數)", self.var_band_margin),
+                           ("漏判容忍時間 (ms)", self.var_band_missing_ms)):
             row = tk.Frame(self.frm_position)
             row.pack(fill="x")
             tk.Label(row, text=label, width=22, anchor="w").pack(side="left")
@@ -1047,10 +1197,10 @@ class ComboEditor:
             if var in (self.var_position_press, self.var_position_release):
                 self.position_only_rows.append(row)
             if var in (self.var_band_color, self.var_band_tolerance, self.var_band_start,
-                       self.var_band_stop, self.var_band_margin):
+                       self.var_band_stop, self.var_band_margin, self.var_band_missing_ms):
                 self.band_only_rows.append(row)
         self.lbl_band_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
-            text="色帶判斷：排除箭頭與白／暗色後取樣附近色帶。找不到箭頭就停止；同色背景可能使箭頭辨識失敗。")
+            text="色帶判斷：排除箭頭與白／暗色後取樣。漏判時在容忍時間內維持動作；0 表示立即停止。辨識到停止比例仍立即停止。同色背景可能使箭頭辨識失敗。")
         self.lbl_control_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
             text="條件成立時：單擊／按一下／點圖執行一次；連點／長按依時間與間隔重複。條件失效立即取消。")
         self.lbl_control_hint.pack(anchor="w")
@@ -1076,6 +1226,15 @@ class ComboEditor:
         self.lbl_position_status.pack(anchor="w")
         self._position_frame = None
         self.win.bind("<Destroy>", self._cancel_position_preview, add="+")
+        for var in (self.var_band_color, self.var_band_tolerance, self.var_band_start,
+                    self.var_band_stop, self.var_band_margin, self.var_band_missing_ms, self.var_position_color,
+                    self.var_position_tolerance, self.var_position_area,
+                    self.var_position_max_area, *self.position_region_vars):
+            var.trace_add("write", self._refresh_band_preview)
+
+    def _refresh_band_preview(self, *args):
+        if self.var_trigger.get() == TriggerMode.COLOR_BAND.value:
+            self._preview_position()
 
     def _position_settings(self):
         if any(not var.get().strip() for var in self.position_region_vars):
@@ -1098,7 +1257,8 @@ class ComboEditor:
             band_tolerance=int(self.var_band_tolerance.get()),
             band_start=self._to_float(self.var_band_start.get()) / 100,
             band_stop=self._to_float(self.var_band_stop.get()) / 100,
-            band_margin=self._to_float(self.var_band_margin.get()))
+            band_margin=self._to_float(self.var_band_margin.get()),
+            band_missing_ms=int(self.var_band_missing_ms.get()))
         settings.validate()
         try:
             with Image.open(self.var_image.get().strip()) as image:
@@ -1167,8 +1327,12 @@ class ComboEditor:
                 self.lbl_position_status.config(text="未找到唯一標記：調整顏色／容差／區域。此時會停止動作。")
             if band_mode:
                 active, ratio = color_band_state(frame, marker, settings)
+                continues, _ = color_band_state(frame, marker, settings, active=True)
                 text = ("箭頭或色帶取樣不足：停止" if ratio is None else
-                        f"執行色帶比例：{ratio:.1%}；{'可啟動動作' if active else '未達啟動比例'}")
+                        f"執行色帶比例：{ratio:.1%}\n"
+                        f"原本未執行：{'啟動' if active else '維持停止'}\n"
+                        f"原本執行中：{'繼續執行' if continues else '停止'}")
+                text += "\n預覽僅測設定圖片，不執行動作。"
                 self.lbl_position_status.config(text=text)
         except (ValueError, TypeError, OSError) as e:
             self._position_frame = None

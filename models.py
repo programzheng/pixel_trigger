@@ -117,6 +117,7 @@ class PositionControl:
     band_start: float = 0.8
     band_stop: float = 0.6
     band_margin: float = 0.5  # 箭頭外框尺寸的倍數
+    band_missing_ms: int = 150
 
     def validate(self):
         if self.region_space not in ("screen", "template"):
@@ -146,6 +147,8 @@ class PositionControl:
             raise ValueError("色帶比例必須符合：0 ≤ 停止比例 < 啟動比例 ≤ 100%。")
         if not math.isfinite(self.band_margin) or not 0.1 <= self.band_margin <= 3:
             raise ValueError("取樣範圍必須介於箭頭大小的 0.1~3 倍。")
+        if type(self.band_missing_ms) is not int or self.band_missing_ms < 0:
+            raise ValueError("漏判容忍時間必須是非負整數（毫秒）。")
 
     def to_dict(self) -> dict:
         return {"region_space": self.region_space, "region": self.region, "color": self.color,
@@ -153,7 +156,7 @@ class PositionControl:
                 "press_at": self.press_at, "release_at": self.release_at,
                 "band_color": self.band_color, "band_tolerance": self.band_tolerance,
                 "band_start": self.band_start, "band_stop": self.band_stop,
-                "band_margin": self.band_margin}
+                "band_margin": self.band_margin, "band_missing_ms": self.band_missing_ms}
 
     @classmethod
     def from_dict(cls, d: dict) -> PositionControl:
@@ -166,7 +169,8 @@ class PositionControl:
                    band_color=tuple(d.get("band_color", (115, 170, 75))),
                    band_tolerance=d.get("band_tolerance", 15),
                    band_start=d.get("band_start", 0.8), band_stop=d.get("band_stop", 0.6),
-                   band_margin=d.get("band_margin", 0.5))
+                   band_margin=d.get("band_margin", 0.5),
+                   band_missing_ms=d.get("band_missing_ms", 150))
 
 
 # ── Combo ─────────────────────────────────────────────────

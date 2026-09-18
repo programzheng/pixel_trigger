@@ -8,3 +8,4 @@ __pycache__/
 dist/pyinstaller/
 dist/pyinstaller-build/
 models/
+logs/
