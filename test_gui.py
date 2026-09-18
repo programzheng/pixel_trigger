@@ -14,6 +14,99 @@ from models import Action, ActionType, Combo, PositionControl, Profile, TriggerM
 
 
 class ComboScaleDisplayTest(unittest.TestCase):
+    def test_combo_log_view_is_bounded_live_and_separate(self):
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        app.root.withdraw()
+        try:
+            combo, other = Combo(name="釣魚"), Combo(name="其他")
+            app.profile = Profile(combos=[combo, other])
+            app._refresh_combo_tree()
+            app.tree.selection_set(combo.id)
+            for index in range(510):
+                app._on_log(combo.id, f"測試 {index}")
+            app._on_log(other.id, "另一個 Combo 的錯誤", "error")
+            app._show_combo_log()
+            win, text = app._log_window, app._log_text
+            content = text.get("1.0", "end")
+            self.assertEqual(len(app._combo_logs[combo.id]), 500)
+            self.assertIn("測試 509", content)
+            self.assertNotIn("另一個 Combo 的錯誤", content)
+            app._on_log(combo.id, "色帶未達啟動比例", "failure")
+            app._update_log_view()
+            self.assertIn("色帶未達啟動比例", text.get("1.0", "end"))
+            app._show_combo_log()
+            self.assertIs(app._log_window, win)
+            app._log_selector.selection_set(1)
+            app._select_log_combos()
+            content = text.get("1.0", "end")
+            self.assertIn("另一個 Combo 的錯誤", content)
+            self.assertLess(content.index("另一個 Combo 的錯誤"), content.index("色帶未達啟動比例"))
+            app._log_filter.set("條件失敗與錯誤")
+            app._update_log_view()
+            content = text.get("1.0", "end")
+            self.assertNotIn("測試 509", content)
+            self.assertIn("色帶未達啟動比例", content)
+            app._log_filter.set("僅錯誤")
+            app._update_log_view()
+            content = text.get("1.0", "end")
+            self.assertIn("另一個 Combo 的錯誤", content)
+            self.assertNotIn("色帶未達啟動比例", content)
+            app._copy_log()
+            self.assertEqual(app.root.clipboard_get(), text.get("1.0", "end-1c"))
+            app._log_pause.set(True)
+            with patch.object(text, "see") as scroll:
+                app._on_log(combo.id, "新錯誤", "error")
+                app._update_log_view()
+                scroll.assert_not_called()
+            app._show_log()
+            self.assertTrue(app._log_all.get())
+            self.assertIs(app._log_window, win)
+            app._clear_logs()
+            self.assertEqual(text.get("1.0", "end-1c"), "")
+        finally:
+            for job in app.root.tk.call("after", "info"):
+                app.root.after_cancel(job)
+            app.root.destroy()
+
+    def test_color_band_test_adjusts_tolerance_without_actions(self):
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "gauge.png"
+                image = Image.new("RGB", (60, 60), (115, 170, 75))
+                image.paste((255, 170, 41), (25, 25, 35, 35))
+                image.save(path)
+                combo = Combo(image_path=str(path), trigger=TriggerMode.COLOR_BAND,
+                              position_control=PositionControl(region=(0, 0, 60, 60),
+                                      color=(255, 170, 41), band_color=(75, 170, 115)))
+                with patch.object(tk.Toplevel, "wait_window"):
+                    editor = ComboEditor(root, combo)
+                try:
+                    editor.var_band_tolerance.set("0")
+                    self.assertIn("原本執行中：停止", editor.lbl_position_status.cget("text"))
+                    editor.var_band_tolerance.set("30")
+                    self.assertIn("原本未執行：啟動", editor.lbl_position_status.cget("text"))
+                    self.assertFalse(any(isinstance(w, tk.Toplevel) for w in editor.win.winfo_children()))
+                    editor.var_band_start.set("")
+                    self.assertFalse("原本未執行：啟動" in editor.lbl_position_status.cget("text"))
+                    editor.var_band_start.set("80")
+                    self.assertIn("原本未執行：啟動", editor.lbl_position_status.cget("text"))
+                    self.assertEqual(combo.position_control.band_tolerance, 15)
+                    editor.var_band_missing_ms.set("325")
+                    editor._ok()
+                    self.assertTrue(editor.result)
+                    restored = Combo.from_dict(combo.to_dict())
+                    self.assertEqual(restored.position_control.band_missing_ms, 325)
+                    with patch.object(tk.Toplevel, "wait_window"):
+                        editor = ComboEditor(root, restored)
+                    self.assertEqual(editor.var_band_missing_ms.get(), "325")
+                finally:
+                    editor.win.destroy()
+        finally:
+            root.destroy()
+
     def test_o_sound_only_on_detection_transition_and_when_enabled(self):
         app = App.__new__(App)
         app._debug_data = {}

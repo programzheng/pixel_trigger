@@ -6,10 +6,87 @@ import numpy as np
 
 import input_controller
 from automation import HookEngine
-from models import Action, ActionType, Combo, Profile, TriggerMode
+from models import Action, ActionType, Combo, Profile, TriggerMode, PositionControl
 
 
 class ResponsiveAutomationTest(unittest.TestCase):
+    def test_combo_logs_distinguish_modes_and_throttle_repeated_reasons(self):
+        records = []
+        engine = HookEngine(on_log=lambda cid, message, level: records.append((cid, message)))
+        combo = Combo(image_path="gauge.png")
+        engine.set_profile(Profile(combos=[combo]))
+        with patch("automation.time.monotonic", side_effect=(0, 0.1, 0.2, 1.3)):
+            engine._log(combo, "定位失敗", "分數=0.2")
+            engine._log(combo, "定位失敗", "分數=0.3")
+            engine._log(combo, "箭頭失敗")
+            engine._log(combo, "箭頭失敗")
+        self.assertEqual(len(records), 3)
+        for mode in TriggerMode:
+            combo.trigger = mode
+            engine._last_logs.clear()
+            records.clear()
+            stopped = threading.Event()
+            if mode.tracks_marker:
+                with patch.object(engine._capture, "position_frame", return_value=(None, None)), \
+                        patch.object(engine, "_interruptible_sleep_event", side_effect=lambda *a: stopped.set()):
+                    engine._position_control_loop(combo, stopped)
+                self.assertTrue(any("圖片定位未通過" in message for _, message in records))
+            else:
+                with patch.object(engine._capture, "match_template", return_value=(False, 0.3, None)):
+                    engine._process_combo(combo, np.zeros((60, 60)), None)
+                self.assertIn("圖片定位未通過", records[0][1])
+            self.assertTrue(all(cid == combo.id and mode.value in message for cid, message in records))
+        records.clear()
+        combo.trigger = TriggerMode.ON_APPEAR
+        combo.image_path = ""
+        combo.verify_text = "魚"
+        with patch.object(engine._capture, "ocr_verify", return_value=(False, 0.4, "")):
+            engine._process_combo(combo, np.zeros((60, 60)), None)
+        self.assertIn("OCR 未通過", records[0][1])
+
+    def test_color_band_missing_timeout_and_valid_stop(self):
+        for timeout in (0, 150, 400):
+            with self.subTest(timeout=timeout):
+                settings = PositionControl(region=(0, 0, 60, 60), band_missing_ms=timeout)
+                combo = Combo(trigger=TriggerMode.COLOR_BAND, position_control=settings)
+                engine = HookEngine()
+                engine.set_profile(Profile(combos=[combo]))
+                stopped = threading.Event()
+                debug, states, events = [], [], []
+                engine._on_debug_info = lambda *args: debug.append(args[1])
+
+                def new_thread(*args, **kwargs):
+                    from unittest.mock import Mock
+                    events.append(kwargs["args"][1])
+                    thread = Mock()
+                    thread.is_alive.return_value = False
+                    return thread
+
+                def tick(*args):
+                    states.append(events[-1].is_set())
+                    if len(states) == 6:
+                        stopped.set()
+
+                # 啟動、首次漏判、容忍期間、超時、恢復、有效停止。
+                clock = (1, 1 + timeout / 2000, 1 + timeout / 1000 + 0.01)
+                with patch("automation.color_band_state", side_effect=[(True, 1), (False, None),
+                        (False, None), (False, None), (True, 1), (False, 0)]), \
+                        patch("automation.find_color_marker", return_value=None), \
+                        patch.object(engine._capture, "position_frame", return_value=(None, None)), \
+                        patch("automation.time.monotonic", side_effect=clock), \
+                        patch("automation.threading.Thread", side_effect=new_thread), \
+                        patch.object(engine, "_interruptible_sleep_event", side_effect=tick):
+                    engine._position_control_loop(combo, stopped)
+                self.assertEqual(states, [False, timeout == 0, timeout == 0, True, False, True])
+                self.assertEqual(debug, [True, False, False, False, True, False])
+                self.assertTrue(all(event.is_set() for event in events))
+                self.assertEqual(PositionControl.from_dict(settings.to_dict()).band_missing_ms, timeout)
+        self.assertEqual(PositionControl.from_dict({}).band_missing_ms, 150)
+        for invalid in (-1, 1.5, True):
+            settings.band_missing_ms = invalid
+            with self.assertRaises(ValueError):
+                settings.validate()
+
     def test_marker_modes_support_every_action_and_cancel(self):
         for trigger in (TriggerMode.POSITION_CONTROL, TriggerMode.COLOR_BAND):
             for action_type, method in ((ActionType.CLICK, "mouse_click"),
