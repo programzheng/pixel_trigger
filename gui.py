@@ -14,9 +14,11 @@ import tkinter as tk
 from datetime import datetime
 
 warnings.filterwarnings("ignore", message=".*pin_memory.*")
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog
+
 from pathlib import Path
 
+import ttkbootstrap as ttk
 import numpy as np
 from PIL import Image, ImageGrab, ImageTk
 
@@ -83,7 +85,7 @@ def _create_log_logger():
 
 class App:
     def __init__(self):
-        self.root = tk.Tk()
+        self.root = ttk.Window(themename="litera", hdpi=False)
         self.root.title("PixelTrigger")
         self.root.geometry("900x800")
         self.root.resizable(True, True)
@@ -136,23 +138,23 @@ class App:
 
     def _build_ui(self):
         # Reserve the controls first so a shorter window keeps both toggles visible.
-        frm_ctrl = tk.Frame(self.root, padx=10, pady=10)
+        frm_ctrl = ttk.Frame(self.root, padding=(10, 10))
         frm_ctrl.pack(side="bottom", fill="x")
         # --- Profile 列 ---
-        frm_profile = tk.Frame(self.root, padx=10, pady=5)
+        frm_profile = ttk.Frame(self.root, padding=(10, 5))
         frm_profile.pack(fill="x")
 
-        tk.Label(frm_profile, text="Profile:").pack(side="left")
+        ttk.Label(frm_profile, text="Profile:").pack(side="left")
         self.cmb_profile = ttk.Combobox(frm_profile, state="readonly", width=20)
         self.cmb_profile.pack(side="left", padx=5)
         self.cmb_profile.bind("<<ComboboxSelected>>", self._on_profile_selected)
 
-        tk.Button(frm_profile, text="儲存", width=5, command=self._save_profile).pack(side="left", padx=2)
-        tk.Button(frm_profile, text="另存", width=5, command=self._save_profile_as).pack(side="left", padx=2)
-        tk.Button(frm_profile, text="新增", width=5, command=self._new_profile).pack(side="left", padx=2)
+        ttk.Button(frm_profile, text="儲存", width=5, command=self._save_profile).pack(side="left", padx=2)
+        ttk.Button(frm_profile, text="另存", width=5, command=self._save_profile_as).pack(side="left", padx=2)
+        ttk.Button(frm_profile, text="新增", width=5, command=self._new_profile).pack(side="left", padx=2)
 
         # --- Combo 列表 ---
-        frm_combos = tk.LabelFrame(self.root, text="Combo 列表", padx=10, pady=5)
+        frm_combos = ttk.Labelframe(self.root, text="Combo 列表", padding=(10, 5))
         frm_combos.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Treeview
@@ -174,43 +176,43 @@ class App:
         self.tree.bind("<Double-1>", self._on_tree_double_click)
 
         # Combo 按鈕列
-        frm_combo_btns = tk.Frame(frm_combos)
+        frm_combo_btns = ttk.Frame(frm_combos)
         frm_combo_btns.pack(fill="x", pady=5)
-        tk.Button(frm_combo_btns, text="新增 Combo", command=self._add_combo).pack(side="left", padx=2)
-        tk.Button(frm_combo_btns, text="編輯", command=self._edit_combo).pack(side="left", padx=2)
-        tk.Button(frm_combo_btns, text="刪除", command=self._delete_combo).pack(side="left", padx=2)
-        tk.Button(frm_combo_btns, text="啟用/停用", command=self._toggle_combo_enabled).pack(side="left", padx=2)
-        tk.Button(frm_combo_btns, text="▲ 上移", command=self._move_combo_up).pack(side="left", padx=2)
-        tk.Button(frm_combo_btns, text="▼ 下移", command=self._move_combo_down).pack(side="left", padx=2)
-        tk.Button(frm_combo_btns, text="Log", command=self._show_combo_log).pack(side="left", padx=2)
-        tk.Button(frm_combo_btns, text="全部 Log", command=self._show_log).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="新增 Combo", bootstyle="success", command=self._add_combo).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="編輯", command=self._edit_combo).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="刪除", bootstyle="danger-outline", command=self._delete_combo).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="啟用/停用", command=self._toggle_combo_enabled).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="▲ 上移", command=self._move_combo_up).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="▼ 下移", command=self._move_combo_down).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="Log", command=self._show_combo_log).pack(side="left", padx=2)
+        ttk.Button(frm_combo_btns, text="全部 Log", command=self._show_log).pack(side="left", padx=2)
 
         # --- 偵測區域 ---
-        frm_region = tk.LabelFrame(self.root, text="偵測區域 (留空=全螢幕)", padx=10, pady=5)
+        frm_region = ttk.Labelframe(self.root, text="偵測區域 (留空=全螢幕)", padding=(10, 5))
         frm_region.pack(fill="x", padx=10, pady=5)
 
-        window_row = tk.Frame(frm_region)
+        window_row = ttk.Frame(frm_region)
         window_row.pack(fill="x", pady=(0, 5))
-        tk.Label(window_row, text="目標視窗:").pack(side="left")
+        ttk.Label(window_row, text="目標視窗:").pack(side="left")
         self.cmb_window = ttk.Combobox(window_row, state="readonly", width=55)
         self.cmb_window.pack(side="left", padx=5)
         self.cmb_window.bind("<<ComboboxSelected>>", self._on_window_selected)
-        tk.Button(window_row, text="重新整理", command=self._refresh_windows).pack(side="left")
-        tk.Label(frm_region, text="選視窗後忽略 XY 並自動跟隨；需保持可見。最小化／關閉：主動停止，背景暫停讀取。",
-                 fg="#666666").pack(anchor="w")
-        grid = tk.Frame(frm_region)
+        ttk.Button(window_row, text="重新整理", command=self._refresh_windows).pack(side="left")
+        ttk.Label(frm_region, text="選視窗後忽略 XY 並自動跟隨；需保持可見。最小化／關閉：主動停止，背景暫停讀取。",
+                 foreground="#666666").pack(anchor="w")
+        grid = ttk.Frame(frm_region)
         grid.pack(fill="x")
         labels = ["X:", "Y:", "寬:", "高:"]
         self.region_vars: list[tk.StringVar] = []
         self.region_controls: list[tk.Widget] = []
         for i, lbl in enumerate(labels):
-            tk.Label(grid, text=lbl).grid(row=0, column=i * 2, sticky="e")
+            ttk.Label(grid, text=lbl).grid(row=0, column=i * 2, sticky="e")
             var = tk.StringVar()
-            entry = tk.Entry(grid, textvariable=var, width=7)
+            entry = ttk.Entry(grid, textvariable=var, width=7)
             entry.grid(row=0, column=i * 2 + 1, padx=2)
             self.region_controls.append(entry)
             self.region_vars.append(var)
-        select_button = tk.Button(
+        select_button = ttk.Button(
             grid, text="框選", command=self._select_region,
         )
         select_button.grid(row=0, column=8, padx=(8, 0))
@@ -218,39 +220,39 @@ class App:
         self._refresh_windows()
 
         # --- 狀態列 ---
-        frm_status = tk.Frame(self.root, padx=10, pady=5)
+        frm_status = ttk.Frame(self.root, padding=(10, 5))
         frm_status.pack(fill="x")
 
-        self.lbl_cycles = tk.Label(frm_status, text="主動掃描: 0 次", fg="#666666")
+        self.lbl_cycles = ttk.Label(frm_status, text="主動掃描: 0 次", foreground="#666666")
         self.lbl_cycles.pack(side="right")
 
         # --- 啟動/停止 ---
 
-        self.btn_toggle = tk.Button(
-            frm_ctrl, text="啟動主動偵測", font=("Microsoft JhengHei", 12, "bold"),
-            bg="#4CAF50", fg="white", command=self.toggle, height=2,
+        self.btn_toggle = ttk.Button(
+            frm_ctrl, text="啟動主動偵測", bootstyle="success",
+            padding=(12, 14), command=self.toggle,
         )
         self.btn_toggle.pack(fill="x")
 
-        self.lbl_hotkey = tk.Label(frm_ctrl, text="", fg="#666666")
+        self.lbl_hotkey = ttk.Label(frm_ctrl, text="", foreground="#666666")
         self.lbl_hotkey.pack(side="bottom", pady=(5, 0))
-        self.btn_background = tk.Button(
-            frm_ctrl, text="啟動背景偵測", font=("Microsoft JhengHei", 12, "bold"),
-            bg="#4CAF50", fg="white", command=self._toggle_background, height=2,
+        self.btn_background = ttk.Button(
+            frm_ctrl, text="啟動背景偵測", bootstyle="success",
+            padding=(12, 14), command=self._toggle_background,
         )
         self.btn_background.pack(fill="x", pady=4)
-        frm_debug = tk.Frame(frm_ctrl)
+        frm_debug = ttk.Frame(frm_ctrl)
         frm_debug.pack(fill="x", pady=4)
-        tk.Checkbutton(
+        ttk.Checkbutton(
             frm_debug, text="主動 Debug 框線", variable=self._debug_mode,
             command=self._on_debug_mode_toggle,
         ).pack(side="left", padx=10)
-        tk.Checkbutton(
+        ttk.Checkbutton(
             frm_debug, text="背景 Debug 框線", variable=self._background_debug_mode,
             command=self._on_debug_mode_toggle,
         ).pack(side="left", padx=10)
-        tk.Button(frm_ctrl, text="記帳統計", command=self._show_calc).pack(side="left")
-        tk.Button(frm_ctrl, text="設定快捷鍵", command=self._configure_hotkeys).pack(side="left", padx=5)
+        ttk.Button(frm_ctrl, text="記帳統計", command=self._show_calc).pack(side="left")
+        ttk.Button(frm_ctrl, text="設定快捷鍵", command=self._configure_hotkeys).pack(side="left", padx=5)
         self._refresh_hotkeys()
 
     # ══════════════════════════════════════════════════════
@@ -262,7 +264,7 @@ class App:
             self._stop()
         if hasattr(self, "background"):
             self.background.stop()
-            self.btn_background.config(text="啟動背景偵測", bg="#4CAF50")
+            self.btn_background.config(text="啟動背景偵測", bootstyle="success")
         if self._calc_window is not None and self._calc_window.winfo_exists():
             self._calc_window.destroy()
         self._msg_queue = collections.deque(
@@ -308,12 +310,12 @@ class App:
                 for row, (label, value) in enumerate((
                         ("主動偵測快捷鍵:", profile.hotkey),
                         ("背景偵測快捷鍵:", profile.background_hotkey))):
-                    tk.Label(parent, text=label).grid(row=row, column=0, padx=8, pady=6)
-                    entry = tk.Entry(parent, width=24)
+                    ttk.Label(parent, text=label).grid(row=row, column=0, padx=8, pady=6)
+                    entry = ttk.Entry(parent, width=24)
                     entry.insert(0, value)
                     entry.grid(row=row, column=1, padx=8, pady=6)
                     self.entries.append(entry)
-                tk.Label(parent, text="例如 F6、F7、ctrl+shift+b").grid(row=2, column=0, columnspan=2, pady=5)
+                ttk.Label(parent, text="例如 F6、F7、ctrl+shift+b").grid(row=2, column=0, columnspan=2, pady=5)
                 return self.entries[0]
 
             def apply(self):
@@ -347,7 +349,7 @@ class App:
     def _toggle_background(self):
         if self.background.running:
             self.background.stop()
-            self.btn_background.config(text="啟動背景偵測", bg="#4CAF50")
+            self.btn_background.config(text="啟動背景偵測", bootstyle="success")
             self._background_debug_data.clear()
             self._on_debug_mode_toggle()
             return
@@ -356,7 +358,7 @@ class App:
             # Persist identity before the first CSV record, including legacy profiles.
             profile_manager.save_profile(self.profile, self._profile_path.name if self._profile_path else None)
             self.background.start(self.profile)
-            self.btn_background.config(text="停止背景偵測", bg="#F44336")
+            self.btn_background.config(text="停止背景偵測", bootstyle="danger")
             self._on_debug_mode_toggle()
         except Exception as error:
             messagebox.showerror("背景偵測設定錯誤", str(error))
@@ -374,21 +376,21 @@ class App:
         win = self._calc_window = tk.Toplevel(self.root)
         win.title("金額記帳統計")
         win.geometry("820x540")
-        row = tk.Frame(win)
+        row = ttk.Frame(win)
         row.pack(fill="x", padx=10, pady=10)
         self._calc_combos = [c for c in self.profile.combos if c.detection_mode == "background"]
         self._calc_choice = ttk.Combobox(row, state="readonly", values=[f"{c.name} [{c.id}]" for c in self._calc_combos])
         self._calc_choice.pack(side="left")
         if self._calc_combos:
             self._calc_choice.current(0)
-        tk.Label(row, text="日期 YYYYMMDD:").pack(side="left", padx=5)
+        ttk.Label(row, text="日期 YYYYMMDD:").pack(side="left", padx=5)
         self._calc_date = tk.StringVar(value=datetime.now().strftime("%Y%m%d"))
-        tk.Entry(row, textvariable=self._calc_date, width=10).pack(side="left")
+        ttk.Entry(row, textvariable=self._calc_date, width=10).pack(side="left")
         self._calc_period = tk.StringVar(value="Daily")
         ttk.OptionMenu(row, self._calc_period, "Daily", "Daily", "Month", "Years").pack(side="left")
-        self._calc_reset = tk.Button(row, text="重設基準", command=self._reset_calc)
+        self._calc_reset = ttk.Button(row, text="重設基準", command=self._reset_calc)
         self._calc_reset.pack(side="left", padx=5)
-        self._calc_summary = tk.Label(win, justify="left", anchor="w")
+        self._calc_summary = ttk.Label(win, justify="left", anchor="w")
         self._calc_summary.pack(fill="x", padx=10, pady=5)
         columns = ("timestamp", "record_type", "balance", "delta")
         self._calc_tree = ttk.Treeview(win, columns=columns, show="headings")
@@ -693,28 +695,28 @@ class App:
             self._log_filter = tk.StringVar(win, value="全部紀錄")
             self._log_previous = None
             self._log_choices = []
-            controls = tk.Frame(win)
+            controls = ttk.Frame(win)
             controls.pack(fill="x", padx=8, pady=5)
-            tk.Checkbutton(controls, text="全部 Combo", variable=self._log_all,
+            ttk.Checkbutton(controls, text="全部 Combo", variable=self._log_all,
                            command=self._update_log_view).pack(side="left")
             filter_box = ttk.Combobox(controls, state="readonly", width=20,
                 textvariable=self._log_filter, values=("全部紀錄", "條件失敗與錯誤", "僅錯誤"))
             filter_box.pack(side="left", padx=8)
             filter_box.bind("<<ComboboxSelected>>", lambda e: self._update_log_view())
-            tk.Checkbutton(controls, text="暫停捲動", variable=self._log_pause).pack(side="left")
-            tk.Button(controls, text="複製顯示紀錄", command=self._copy_log).pack(side="right")
-            tk.Button(controls, text="清除全部紀錄", command=self._clear_logs).pack(side="right", padx=5)
-            tk.Label(win, text="左側可多選 Combo；每個 Combo 保留最近 500 筆，依時間合併顯示。",
+            ttk.Checkbutton(controls, text="暫停捲動", variable=self._log_pause).pack(side="left")
+            ttk.Button(controls, text="複製顯示紀錄", command=self._copy_log).pack(side="right")
+            ttk.Button(controls, text="清除全部紀錄", command=self._clear_logs).pack(side="right", padx=5)
+            ttk.Label(win, text="左側可多選 Combo；每個 Combo 保留最近 500 筆，依時間合併顯示。",
                      anchor="w").pack(fill="x", padx=8)
-            tk.Label(win, text=f"檔案：{self._file_logger.handlers[0].baseFilename}\n每天午夜輪替；清除僅影響介面紀錄。",
+            ttk.Label(win, text=f"檔案：{self._file_logger.handlers[0].baseFilename}\n每天午夜輪替；清除僅影響介面紀錄。",
                      anchor="w", justify="left", wraplength=950).pack(fill="x", padx=8)
-            body = tk.Frame(win)
+            body = ttk.Frame(win)
             body.pack(fill="both", expand=True, padx=8, pady=5)
             self._log_selector = tk.Listbox(body, selectmode="multiple", exportselection=False, width=22)
             self._log_selector.pack(side="left", fill="y", padx=(0, 8))
             self._log_selector.bind("<<ListboxSelect>>", self._select_log_combos)
             self._log_text = tk.Text(body, wrap="word", state="disabled")
-            scroll = tk.Scrollbar(body, command=self._log_text.yview)
+            scroll = ttk.Scrollbar(body, command=self._log_text.yview)
             self._log_text.configure(yscrollcommand=scroll.set)
             scroll.pack(side="right", fill="y")
             self._log_text.pack(fill="both", expand=True)
@@ -891,7 +893,7 @@ class App:
             return
         if not self.engine.running:
             return
-        self.btn_toggle.config(text="停止主動偵測", bg="#F44336")
+        self.btn_toggle.config(text="停止主動偵測", bootstyle="danger")
         self._on_debug_mode_toggle()
 
     def _stop(self):
@@ -899,7 +901,7 @@ class App:
         self._combo_active.clear()
         self._debug_data.clear()
         self._on_debug_mode_toggle()
-        self.btn_toggle.config(text="啟動主動偵測", bg="#4CAF50")
+        self.btn_toggle.config(text="啟動主動偵測", bootstyle="success")
         self._refresh_combo_tree()
 
     # ══════════════════════════════════════════════════════
@@ -990,7 +992,7 @@ class App:
                 running = self.engine.running
                 self.btn_toggle.config(
                     text="停止主動偵測" if running else "啟動主動偵測",
-                    bg="#F44336" if running else "#4CAF50",
+                    bootstyle="danger" if running else "success",
                 )
                 if not running:
                     self._combo_active.clear()
@@ -1002,7 +1004,7 @@ class App:
             elif kind == "background_status":
                 self.btn_background.config(
                     text="停止背景偵測" if self.background.running else "啟動背景偵測",
-                    bg="#F44336" if self.background.running else "#4CAF50",
+                    bootstyle="danger" if self.background.running else "success",
                 )
                 if msg[1] not in ("背景偵測中", "背景偵測已停止"):
                     for combo in self.profile.combos:
@@ -1086,8 +1088,8 @@ class ComboEditor:
         self.win = tk.Toplevel(parent)
         self.win.title("編輯 Combo")
         self.win.transient(parent)
-        self.win.geometry("420x740")
-        self.win.minsize(380, 500)
+        self.win.geometry("560x740")
+        self.win.minsize(520, 500)
         self.win.resizable(True, True)
         self.win.grab_set()
         self.win.attributes("-topmost", True)
@@ -1095,10 +1097,10 @@ class ComboEditor:
         pad = {"padx": 10, "pady": 3}
 
         # 確定/取消 — 先 pack 到底部，確保任何視窗大小都不被擠掉
-        frm_btns = tk.Frame(self.win)
+        frm_btns = ttk.Frame(self.win)
         frm_btns.pack(side="bottom", pady=10)
-        tk.Button(frm_btns, text="確定", width=10, command=self._ok).pack(side="left", padx=10)
-        tk.Button(frm_btns, text="取消", width=10, command=self.win.destroy).pack(side="left", padx=10)
+        ttk.Button(frm_btns, text="確定", bootstyle="primary", width=10, command=self._ok).pack(side="left", padx=10)
+        ttk.Button(frm_btns, text="取消", width=10, command=self.win.destroy).pack(side="left", padx=10)
 
         # ── 可捲動內容區 ──────────────────────────────────────
         _canvas = tk.Canvas(self.win, highlightthickness=0)
@@ -1106,48 +1108,48 @@ class ComboEditor:
         _canvas.configure(yscrollcommand=_vsb.set)
         _vsb.pack(side="right", fill="y")
         _canvas.pack(side="left", fill="both", expand=True)
-        sf = tk.Frame(_canvas)
+        sf = ttk.Frame(_canvas)
         _win_id = _canvas.create_window((0, 0), window=sf, anchor="nw")
         sf.bind("<Configure>", lambda e: _canvas.configure(scrollregion=_canvas.bbox("all")))
         _canvas.bind("<Configure>", lambda e: _canvas.itemconfigure(_win_id, width=e.width))
         self.win.bind("<MouseWheel>", lambda e: _canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
         # 名稱
-        tk.Label(sf, text="名稱:").pack(anchor="w", **pad)
+        ttk.Label(sf, text="名稱:").pack(anchor="w", **pad)
         self.var_name = tk.StringVar(value=combo.name)
-        tk.Entry(sf, textvariable=self.var_name, width=40).pack(fill="x", **pad)
+        ttk.Entry(sf, textvariable=self.var_name, width=40).pack(fill="x", **pad)
         self.var_detection_mode = tk.StringVar(value=combo.detection_mode)
-        mode_row = tk.Frame(sf)
+        mode_row = ttk.Frame(sf)
         mode_row.pack(fill="x", **pad)
         for mode, label in (("active", "主動偵測"), ("background", "背景偵測（記帳）")):
-            tk.Radiobutton(mode_row, text=label, value=mode, variable=self.var_detection_mode,
+            ttk.Radiobutton(mode_row, text=label, value=mode, variable=self.var_detection_mode,
                            command=self._on_detection_mode_change).pack(side="left")
 
         # 圖片
         image_start = len(sf.winfo_children())
-        frm_img = tk.Frame(sf)
+        frm_img = ttk.Frame(sf)
         frm_img.pack(fill="x", **pad)
-        self.lbl_image = tk.Label(frm_img, text="觸發圖片:")
+        self.lbl_image = ttk.Label(frm_img, text="觸發圖片:")
         self.lbl_image.pack(side="left")
         self.var_image = tk.StringVar(value=combo.image_path)
-        tk.Entry(frm_img, textvariable=self.var_image, width=12).pack(side="left", padx=5, fill="x", expand=True)
-        tk.Button(frm_img, text="瀏覽", command=self._browse_image).pack(side="left", padx=2)
-        tk.Button(frm_img, text="貼上", command=self._paste_image).pack(side="left", padx=2)
-        tk.Button(frm_img, text="框選", command=self._capture_image).pack(side="left", padx=2)
+        ttk.Entry(frm_img, textvariable=self.var_image, width=12).pack(side="left", padx=5, fill="x", expand=True)
+        ttk.Button(frm_img, text="瀏覽", command=self._browse_image).pack(side="left", padx=2)
+        ttk.Button(frm_img, text="貼上", command=self._paste_image).pack(side="left", padx=2)
+        ttk.Button(frm_img, text="框選", command=self._capture_image).pack(side="left", padx=2)
 
         # 圖片預覽（文字 + 去背按鈕 + 縮圖）
-        frm_preview = tk.Frame(sf)
+        frm_preview = ttk.Frame(sf)
         frm_preview.pack(fill="x", padx=10)
-        self.btn_rmbg = tk.Button(
+        self.btn_rmbg = ttk.Button(
             frm_preview, text="去背", command=self._remove_bg,
         )
         self.btn_rmbg.pack(side="right", padx=5)
         self.btn_rmbg.pack_forget()  # 初始隱藏，有圖才顯示
-        self.lbl_preview = tk.Label(frm_preview, text="", fg="#888888", anchor="w")
+        self.lbl_preview = ttk.Label(frm_preview, text="", foreground="#888888", anchor="w")
         self.lbl_preview.pack(side="left", fill="x", expand=True)
 
         self._preview_photo = None  # 防止 GC 回收 PhotoImage
-        self.lbl_thumb = tk.Label(sf, relief="groove")
+        self.lbl_thumb = ttk.Label(sf, relief="groove")
         self.lbl_thumb.pack(anchor="w", padx=10, pady=2)
         self.lbl_thumb.pack_forget()  # 初始隱藏，有圖才顯示
 
@@ -1159,36 +1161,36 @@ class ComboEditor:
         self.win.bind("<Control-v>", lambda e: self._paste_image())
 
         # 比對閾值
-        frm_thresh = tk.Frame(sf)
+        frm_thresh = ttk.Frame(sf)
         frm_thresh.pack(fill="x", **pad)
-        tk.Label(frm_thresh, text="圖片閾值:").pack(side="left")
+        ttk.Label(frm_thresh, text="圖片閾值:").pack(side="left")
         self.var_threshold = tk.StringVar(value=str(combo.match_threshold))
-        tk.Entry(frm_thresh, textvariable=self.var_threshold, width=8).pack(side="left", padx=5)
-        tk.Label(frm_thresh, text="(0.0~1.0, 越高越嚴格)").pack(side="left")
+        ttk.Entry(frm_thresh, textvariable=self.var_threshold, width=8).pack(side="left", padx=5)
+        ttk.Label(frm_thresh, text="(0.0~1.0, 越高越嚴格)").pack(side="left")
 
         # 文字驗證（可選）— 分兩行避免溢出
-        frm_vtext1 = tk.Frame(sf)
+        frm_vtext1 = ttk.Frame(sf)
         frm_vtext1.pack(fill="x", **pad)
-        tk.Label(frm_vtext1, text="驗證文字:").pack(side="left")
+        ttk.Label(frm_vtext1, text="驗證文字:").pack(side="left")
         self.var_verify_text = tk.StringVar(value=combo.verify_text)
-        tk.Entry(frm_vtext1, textvariable=self.var_verify_text, width=20).pack(side="left", padx=5, fill="x", expand=True)
-        tk.Label(frm_vtext1, text="(留空=不驗證)").pack(side="left")
+        ttk.Entry(frm_vtext1, textvariable=self.var_verify_text, width=20).pack(side="left", padx=5, fill="x", expand=True)
+        ttk.Label(frm_vtext1, text="(留空=不驗證)").pack(side="left")
 
-        frm_vtext1b = tk.Frame(sf)
+        frm_vtext1b = ttk.Frame(sf)
         frm_vtext1b.pack(fill="x", padx=10, pady=1)
-        tk.Button(frm_vtext1b, text="螢幕截取 OCR", command=self._ocr_from_screen).pack(side="left")
+        ttk.Button(frm_vtext1b, text="螢幕截取 OCR", command=self._ocr_from_screen).pack(side="left")
 
-        frm_vtext2 = tk.Frame(sf)
+        frm_vtext2 = ttk.Frame(sf)
         frm_vtext2.pack(fill="x", **pad)
-        tk.Label(frm_vtext2, text="文字閾值:").pack(side="left")
+        ttk.Label(frm_vtext2, text="文字閾值:").pack(side="left")
         self.var_text_threshold = tk.StringVar(value=str(combo.text_threshold))
-        tk.Entry(frm_vtext2, textvariable=self.var_text_threshold, width=8).pack(side="left", padx=5)
-        tk.Label(frm_vtext2, text="(0.0~1.0, OCR 信心度)").pack(side="left")
+        ttk.Entry(frm_vtext2, textvariable=self.var_text_threshold, width=8).pack(side="left", padx=5)
+        ttk.Label(frm_vtext2, text="(0.0~1.0, OCR 信心度)").pack(side="left")
 
         # 匹配模式 + 吻合比例
-        frm_vtext3 = tk.Frame(sf)
+        frm_vtext3 = ttk.Frame(sf)
         frm_vtext3.pack(fill="x", **pad)
-        tk.Label(frm_vtext3, text="匹配模式:").pack(side="left")
+        ttk.Label(frm_vtext3, text="匹配模式:").pack(side="left")
         self.var_text_match_mode = tk.StringVar(value=combo.text_match_mode.value)
         om = ttk.OptionMenu(
             frm_vtext3, self.var_text_match_mode,
@@ -1198,135 +1200,135 @@ class ComboEditor:
         )
         om.pack(side="left", padx=5)
         # 吻合比例（僅部分符合時顯示）
-        self.lbl_match_ratio = tk.Label(frm_vtext3, text="吻合比例:")
+        self.lbl_match_ratio = ttk.Label(frm_vtext3, text="吻合比例:")
         self.var_text_match_ratio = tk.StringVar(value=str(combo.text_match_ratio))
-        self.ent_match_ratio = tk.Entry(
+        self.ent_match_ratio = ttk.Entry(
             frm_vtext3, textvariable=self.var_text_match_ratio, width=5,
         )
-        self.lbl_match_ratio_hint = tk.Label(frm_vtext3, text="(0.0~1.0)")
+        self.lbl_match_ratio_hint = ttk.Label(frm_vtext3, text="(0.0~1.0)")
         self._on_match_mode_change()  # 初始顯示/隱藏
 
         # 觸發模式
         self.image_widgets = sf.winfo_children()[image_start:]
         self.position_image_widgets = (frm_img, frm_preview, frm_thresh)
         self.image_pack = {w: w.pack_info() for w in self.image_widgets if w.winfo_manager() == "pack"}
-        self.lbl_trigger = tk.Label(sf, text="觸發模式:")
+        self.lbl_trigger = ttk.Label(sf, text="觸發模式:")
         self.lbl_trigger.pack(anchor="w", **pad)
         self.var_trigger = tk.StringVar(value=combo.trigger.value)
-        frm_trigger = tk.Frame(sf)
+        frm_trigger = ttk.Frame(sf)
         frm_trigger.pack(fill="x", **pad)
         for mode in TriggerMode:
-            tk.Radiobutton(
+            ttk.Radiobutton(
                 frm_trigger, text=TRIGGER_LABELS[mode],
                 variable=self.var_trigger, value=mode.value,
                 command=self._on_action_type_change,
             ).pack(anchor="w")
 
         # 動作類型
-        self.lbl_action = tk.Label(sf, text="動作:")
+        self.lbl_action = ttk.Label(sf, text="動作:")
         self.lbl_action.pack(anchor="w", **pad)
         self.var_action_type = tk.StringVar(value=combo.action.action_type.value)
-        frm_at = tk.Frame(sf)
+        frm_at = ttk.Frame(sf)
         self.frm_action_types = frm_at
         frm_at.pack(fill="x", **pad)
         action_types = list(ActionType)
         for i, at in enumerate(action_types):
-            tk.Radiobutton(
+            ttk.Radiobutton(
                 frm_at, text=ACTION_LABELS[at],
                 variable=self.var_action_type, value=at.value,
                 command=self._on_action_type_change,
             ).grid(row=i // 3, column=i % 3, sticky="w", padx=5)
 
         # 動作參數
-        self.frm_params = tk.LabelFrame(sf, text="動作參數", padx=10, pady=5)
+        self.frm_params = ttk.Labelframe(sf, text="動作參數", padding=(10, 5))
         self.frm_params.pack(fill="x", padx=10, pady=5)
         self._build_position_ui(sf)
 
-        self.frm_target = tk.LabelFrame(self.frm_params, text="點擊目標圖片")
+        self.frm_target = ttk.Labelframe(self.frm_params, text="點擊目標圖片")
         self.var_target_image = tk.StringVar(value=combo.action.target_image_path)
-        tk.Entry(self.frm_target, textvariable=self.var_target_image).pack(fill="x", padx=3, pady=3)
-        target_buttons = tk.Frame(self.frm_target)
+        ttk.Entry(self.frm_target, textvariable=self.var_target_image).pack(fill="x", padx=3, pady=3)
+        target_buttons = ttk.Frame(self.frm_target)
         target_buttons.pack(fill="x")
-        tk.Button(target_buttons, text="瀏覽", command=lambda: self._browse_image(target=True)).pack(side="left")
-        tk.Button(target_buttons, text="框選", command=lambda: self._capture_image(target=True)).pack(side="left")
-        tk.Label(target_buttons, text="閾值:").pack(side="left", padx=3)
+        ttk.Button(target_buttons, text="瀏覽", command=lambda: self._browse_image(target=True)).pack(side="left")
+        ttk.Button(target_buttons, text="框選", command=lambda: self._capture_image(target=True)).pack(side="left")
+        ttk.Label(target_buttons, text="閾值:").pack(side="left", padx=3)
         self.var_target_threshold = tk.StringVar(value=str(combo.action.target_threshold))
-        tk.Entry(target_buttons, textvariable=self.var_target_threshold, width=5).pack(side="left")
-        self.lbl_target_thumb = tk.Label(self.frm_target)
+        ttk.Entry(target_buttons, textvariable=self.var_target_threshold, width=5).pack(side="left")
+        self.lbl_target_thumb = ttk.Label(self.frm_target)
         self.lbl_target_thumb.pack(anchor="w")
-        tk.Label(self.frm_target, text="找到目標後點擊中心；找不到就不點擊。", fg="#666666").pack(anchor="w")
+        ttk.Label(self.frm_target, text="找到目標後點擊中心；找不到就不點擊。", foreground="#666666").pack(anchor="w")
         if combo.action.target_image_path:
             self._update_target_preview(combo.action.target_image_path)
 
         # 滑鼠按鍵
-        self.frm_mouse_btn = tk.Frame(self.frm_params)
-        tk.Label(self.frm_mouse_btn, text="滑鼠鍵:").pack(side="left")
+        self.frm_mouse_btn = ttk.Frame(self.frm_params)
+        ttk.Label(self.frm_mouse_btn, text="滑鼠鍵:").pack(side="left")
         self.var_mouse_btn = tk.StringVar(value=combo.action.mouse_button.value)
         for mb in MouseButton:
-            tk.Radiobutton(
+            ttk.Radiobutton(
                 self.frm_mouse_btn, text=MOUSE_BTN_LABELS[mb],
                 variable=self.var_mouse_btn, value=mb.value,
             ).pack(side="left", padx=3)
 
         # 鍵盤按鍵
-        self.frm_key = tk.Frame(self.frm_params)
-        tk.Label(self.frm_key, text="鍵盤鍵:").pack(side="left")
+        self.frm_key = ttk.Frame(self.frm_params)
+        ttk.Label(self.frm_key, text="鍵盤鍵:").pack(side="left")
         self.var_key = tk.StringVar(value=combo.action.key)
-        tk.Entry(self.frm_key, textvariable=self.var_key, width=15).pack(side="left", padx=5)
-        tk.Label(self.frm_key, text="(如: space, e, f)").pack(side="left")
+        ttk.Entry(self.frm_key, textvariable=self.var_key, width=15).pack(side="left", padx=5)
+        ttk.Label(self.frm_key, text="(如: space, e, f)").pack(side="left")
 
         # 延遲
-        self.frm_delay = tk.Frame(self.frm_params)
-        tk.Label(self.frm_delay, text="延遲(秒):").pack(side="left")
+        self.frm_delay = ttk.Frame(self.frm_params)
+        ttk.Label(self.frm_delay, text="延遲(秒):").pack(side="left")
         self.var_delay_min = tk.StringVar(value=str(combo.action.delay_min))
         self.var_delay_max = tk.StringVar(value=str(combo.action.delay_max))
-        tk.Entry(self.frm_delay, textvariable=self.var_delay_min, width=6).pack(side="left", padx=2)
-        tk.Label(self.frm_delay, text="~").pack(side="left")
-        tk.Entry(self.frm_delay, textvariable=self.var_delay_max, width=6).pack(side="left", padx=2)
+        ttk.Entry(self.frm_delay, textvariable=self.var_delay_min, width=6).pack(side="left", padx=2)
+        ttk.Label(self.frm_delay, text="~").pack(side="left")
+        ttk.Entry(self.frm_delay, textvariable=self.var_delay_max, width=6).pack(side="left", padx=2)
 
         # 持續時間
-        self.frm_duration = tk.Frame(self.frm_params)
-        tk.Label(self.frm_duration, text="持續(秒):").pack(side="left")
+        self.frm_duration = ttk.Frame(self.frm_params)
+        ttk.Label(self.frm_duration, text="持續(秒):").pack(side="left")
         self.var_duration = tk.StringVar(value=str(combo.action.duration))
-        tk.Entry(self.frm_duration, textvariable=self.var_duration, width=8).pack(side="left", padx=5)
+        ttk.Entry(self.frm_duration, textvariable=self.var_duration, width=8).pack(side="left", padx=5)
 
         # 間隔 / 放開間隔
-        self.frm_interval = tk.Frame(self.frm_params)
-        self._lbl_interval = tk.Label(self.frm_interval, text="間隔(秒):")
+        self.frm_interval = ttk.Frame(self.frm_params)
+        self._lbl_interval = ttk.Label(self.frm_interval, text="間隔(秒):")
         self._lbl_interval.pack(side="left")
         self.var_interval_min = tk.StringVar(value=str(combo.action.interval_min))
         self.var_interval_max = tk.StringVar(value=str(combo.action.interval_max))
-        tk.Entry(self.frm_interval, textvariable=self.var_interval_min, width=6).pack(side="left", padx=2)
-        tk.Label(self.frm_interval, text="~").pack(side="left")
-        tk.Entry(self.frm_interval, textvariable=self.var_interval_max, width=6).pack(side="left", padx=2)
+        ttk.Entry(self.frm_interval, textvariable=self.var_interval_min, width=6).pack(side="left", padx=2)
+        ttk.Label(self.frm_interval, text="~").pack(side="left")
+        ttk.Entry(self.frm_interval, textvariable=self.var_interval_max, width=6).pack(side="left", padx=2)
 
         self._on_action_type_change()
         self._active_widgets = (self.lbl_trigger, frm_trigger, self.lbl_action,
                                 self.frm_action_types, self.frm_params, self.frm_position,
                                 frm_vtext1, frm_vtext1b, frm_vtext2, frm_vtext3)
         self._active_pack = {w: w.pack_info() for w in self._active_widgets if w.winfo_manager() == "pack"}
-        self.frm_calc = tk.LabelFrame(sf, text="背景金額記帳", padx=8, pady=5)
-        tk.Label(self.frm_calc, text="定位圖請只框選固定圖示，不包含變動數字。\n數字區域相對於定位圖左上角，可超出定位圖。",
+        self.frm_calc = ttk.Labelframe(sf, text="背景金額記帳", padding=(8, 5))
+        ttk.Label(self.frm_calc, text="定位圖請只框選固定圖示，不包含變動數字。\n數字區域相對於定位圖左上角，可超出定位圖。",
                  justify="left", wraplength=340).pack(anchor="w")
-        row = tk.Frame(self.frm_calc)
+        row = ttk.Frame(self.frm_calc)
         row.pack(fill="x")
         self.calc_region_vars = []
         for label, value in zip(("X", "Y", "寬", "高"), combo.calc_region or (0, 0, 0, 0)):
-            tk.Label(row, text=label).pack(side="left")
+            ttk.Label(row, text=label).pack(side="left")
             var = tk.StringVar(value=str(value))
             self.calc_region_vars.append(var)
-            tk.Entry(row, textvariable=var, width=5).pack(side="left")
-        tk.Button(self.frm_calc, text="在螢幕框選數字區域", command=self._select_calc_region).pack(anchor="w")
+            ttk.Entry(row, textvariable=var, width=5).pack(side="left")
+        ttk.Button(self.frm_calc, text="在螢幕框選數字區域", command=self._select_calc_region).pack(anchor="w")
         self.var_daily_limit = tk.StringVar(value=str(combo.daily_limit))
         self.var_warning_ratio = tk.StringVar(value=str(combo.warning_ratio * 100))
         for label, var in (("每日收入上限", self.var_daily_limit), ("預警比例 %", self.var_warning_ratio),
                            ("OCR 信心度 0~1", self.var_text_threshold)):
-            row = tk.Frame(self.frm_calc)
+            row = ttk.Frame(self.frm_calc)
             row.pack(fill="x", pady=3)
-            tk.Label(row, text=label).pack(side="left")
-            tk.Entry(row, textvariable=var, width=8).pack(side="right")
-        tk.Button(self.frm_calc, text="測試讀值（不記帳）", command=self._test_calc).pack(anchor="w")
-        self.lbl_calc_preview = tk.Label(self.frm_calc, text="", wraplength=340)
+            ttk.Label(row, text=label).pack(side="left")
+            ttk.Entry(row, textvariable=var, width=8).pack(side="right")
+        ttk.Button(self.frm_calc, text="測試讀值（不記帳）", command=self._test_calc).pack(anchor="w")
+        self.lbl_calc_preview = ttk.Label(self.frm_calc, text="", wraplength=340)
         self.lbl_calc_preview.pack()
         self._on_detection_mode_change()
         self.win.wait_window()
@@ -1467,9 +1469,9 @@ class ComboEditor:
         self.win.deiconify()
         if text:
             self.var_verify_text.set(text)
-            self.lbl_preview.config(fg="#333333")
+            self.lbl_preview.config(foreground="#333333")
         else:
-            self.lbl_preview.config(text="螢幕上找不到模板，請先確認遊戲畫面已顯示", fg="#cc0000")
+            self.lbl_preview.config(text="螢幕上找不到模板，請先確認遊戲畫面已顯示", foreground="#cc0000")
             return
         # 還原預覽文字
         path = image_path
@@ -1477,7 +1479,7 @@ class ComboEditor:
             from PIL import Image
             img = Image.open(path)
             w, h = img.size
-            self.lbl_preview.config(text=f"{Path(path).name} ({w}x{h})", fg="#333333")
+            self.lbl_preview.config(text=f"{Path(path).name} ({w}x{h})", foreground="#333333")
         except Exception:
             pass
 
@@ -1491,7 +1493,7 @@ class ComboEditor:
             return
         w, h = img.size
         self.lbl_preview.config(
-            text=f"{Path(path).name} ({w}x{h})", fg="#333333",
+            text=f"{Path(path).name} ({w}x{h})", foreground="#333333",
         )
         self.btn_rmbg.pack(side="right", padx=5)
         # 縮放到最大 120px 高
@@ -1515,7 +1517,7 @@ class ComboEditor:
             text = ocr_read_image(path)
             self.var_verify_text.set(text)
             self.lbl_preview.config(
-                text=f"{Path(path).name} ({w}x{h})", fg="#333333",
+                text=f"{Path(path).name} ({w}x{h})", foreground="#333333",
             )
 
     def _update_target_preview(self, path: str):
@@ -1578,7 +1580,7 @@ class ComboEditor:
             img = None
 
         if img is None:
-            self.lbl_preview.config(text="剪貼簿中沒有圖片", fg="red")
+            self.lbl_preview.config(text="剪貼簿中沒有圖片", foreground="red")
             return
 
         profile_manager.TEMPLATES_DIR.mkdir(exist_ok=True)
@@ -1609,18 +1611,18 @@ class ComboEditor:
 
     def _build_position_ui(self, parent):
         settings = self.combo.position_control
-        self.frm_position = tk.LabelFrame(parent, text="位置控制設定", padx=8, pady=5)
-        tk.Label(self.frm_position, text="完整觸發圖片用於定位；框選區域只用來追蹤箭頭。",
+        self.frm_position = ttk.Labelframe(parent, text="位置控制設定", padding=(8, 5))
+        ttk.Label(self.frm_position, text="完整觸發圖片用於定位；框選區域只用來追蹤箭頭。",
                  wraplength=340, justify="left").pack(anchor="w")
-        row = tk.Frame(self.frm_position)
+        row = ttk.Frame(self.frm_position)
         row.pack(fill="x")
         self.position_region_vars = [tk.StringVar(value=str(v) if v is not None else "")
                                      for v in (settings.region if settings.region_space == "template"
                                                and settings.region else (None,) * 4)]
         for label, var in zip(("X", "Y", "寬", "高"), self.position_region_vars):
-            tk.Label(row, text=label).pack(side="left")
-            tk.Entry(row, textvariable=var, width=5).pack(side="left")
-        tk.Button(self.frm_position, text="框選觸發圖片區塊", command=self._select_position_region).pack(anchor="w")
+            ttk.Label(row, text=label).pack(side="left")
+            ttk.Entry(row, textvariable=var, width=5).pack(side="left")
+        ttk.Button(self.frm_position, text="框選觸發圖片區塊", command=self._select_position_region).pack(anchor="w")
         self.var_position_color = tk.StringVar(value="#%02x%02x%02x" % settings.color)
         self.var_position_tolerance = tk.StringVar(value=str(settings.tolerance))
         self.var_position_area = tk.StringVar(value=str(settings.min_area))
@@ -1647,38 +1649,38 @@ class ComboEditor:
                            ("停止色帶比例 (%)", self.var_band_stop),
                            ("取樣範圍 (箭頭倍數)", self.var_band_margin),
                            ("漏判容忍時間 (ms)", self.var_band_missing_ms)):
-            row = tk.Frame(self.frm_position)
+            row = ttk.Frame(self.frm_position)
             row.pack(fill="x")
-            tk.Label(row, text=label, width=22, anchor="w").pack(side="left")
-            tk.Entry(row, textvariable=var, width=10).pack(side="left")
+            ttk.Label(row, text=label, width=22, anchor="w").pack(side="left")
+            ttk.Entry(row, textvariable=var, width=10).pack(side="left")
             if var in (self.var_position_press, self.var_position_release):
                 self.position_only_rows.append(row)
             if var in (self.var_band_color, self.var_band_tolerance, self.var_band_start,
                        self.var_band_stop, self.var_band_margin, self.var_band_missing_ms):
                 self.band_only_rows.append(row)
-        self.lbl_band_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
+        self.lbl_band_hint = ttk.Label(self.frm_position, wraplength=340, justify="left",
             text="色帶判斷：排除箭頭與白／暗色後取樣。漏判時在容忍時間內維持動作；0 表示立即停止。辨識到停止比例仍立即停止。同色背景可能使箭頭辨識失敗。")
-        self.lbl_control_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
+        self.lbl_control_hint = ttk.Label(self.frm_position, wraplength=340, justify="left",
             text="條件成立時：單擊／按一下／點圖／音效執行一次；連點／長按依時間與間隔重複。條件失效立即取消。")
         self.lbl_control_hint.pack(anchor="w")
         self.var_position_preview = tk.BooleanVar(value=True)
         self._position_preview_job = None
-        tk.Checkbutton(self.frm_position, text="預覽觸發圖片區塊",
+        ttk.Checkbutton(self.frm_position, text="預覽觸發圖片區塊",
                        variable=self.var_position_preview, command=self._preview_position).pack(anchor="w")
         self.var_position_click = tk.StringVar(value="取色")
-        row = tk.Frame(self.frm_position)
+        row = ttk.Frame(self.frm_position)
         row.pack(fill="x")
         self.position_tools = []
         for mode in ("取色", "按住線", "放開線", "色帶取色"):
             label = {"按住線": "啟動線", "放開線": "停止線"}.get(mode, mode)
-            button = tk.Radiobutton(row, text=label, variable=self.var_position_click, value=mode)
+            button = ttk.Radiobutton(row, text=label, variable=self.var_position_click, value=mode)
             button.pack(side="left")
             self.position_tools.append(button)
         self.position_canvas = tk.Canvas(self.frm_position, width=340, height=170,
                                          bg="#222222", highlightthickness=0)
         self.position_canvas.pack(anchor="w")
         self.position_canvas.bind("<Button-1>", self._position_preview_click)
-        self.lbl_position_status = tk.Label(self.frm_position, text="先框選觸發圖片區塊，再點圖片取色或設定界線。",
+        self.lbl_position_status = ttk.Label(self.frm_position, text="先框選觸發圖片區塊，再點圖片取色或設定界線。",
                                             wraplength=340, justify="left")
         self.lbl_position_status.pack(anchor="w")
         self._position_frame = None
@@ -2092,7 +2094,7 @@ class ImageRegionSelector(RegionSelector):
         self.overlay.transient(parent)
         self.overlay.attributes("-topmost", True)
         self.overlay.resizable(False, False)
-        tk.Label(self.overlay, text="拖曳框選箭頭移動路徑；完整圖片仍用於定位。ESC 取消。",
+        ttk.Label(self.overlay, text="拖曳框選箭頭移動路徑；完整圖片仍用於定位。ESC 取消。",
                  wraplength=max(200, self._display_size[0])).pack(padx=10, pady=8)
         self._photo = ImageTk.PhotoImage(image.resize(self._display_size))
         self.canvas = tk.Canvas(self.overlay, width=self._display_size[0],
@@ -2137,7 +2139,7 @@ class RemoveBgDialog:
         self.win.grab_set()
         self.win.attributes("-topmost", True)
 
-        tk.Label(
+        ttk.Label(
             self.win, text="點擊圖片選取背景色，拖曳滑桿調整容差",
         ).pack(padx=10, pady=5)
 
@@ -2155,9 +2157,9 @@ class RemoveBgDialog:
         self._display_original()
 
         # ── 容差滑桿 ──
-        frm_tol = tk.Frame(self.win)
+        frm_tol = ttk.Frame(self.win)
         frm_tol.pack(fill="x", padx=10, pady=2)
-        tk.Label(frm_tol, text="容差:").pack(side="left")
+        ttk.Label(frm_tol, text="容差:").pack(side="left")
         self.var_tolerance = tk.IntVar(value=30)
         tk.Scale(
             frm_tol, from_=0, to=100, orient="horizontal",
@@ -2165,16 +2167,16 @@ class RemoveBgDialog:
         ).pack(side="left", fill="x", expand=True)
 
         # ── 狀態 ──
-        self.lbl_info = tk.Label(self.win, text="尚未選取背景色", fg="#888888")
+        self.lbl_info = ttk.Label(self.win, text="尚未選取背景色", foreground="#888888")
         self.lbl_info.pack(padx=10)
 
         # ── 按鈕 ──
-        frm_btns = tk.Frame(self.win)
+        frm_btns = ttk.Frame(self.win)
         frm_btns.pack(pady=10)
-        tk.Button(frm_btns, text="確定", width=10, command=self._ok).pack(
+        ttk.Button(frm_btns, text="確定", bootstyle="primary", width=10, command=self._ok).pack(
             side="left", padx=10,
         )
-        tk.Button(frm_btns, text="取消", width=10, command=self.win.destroy).pack(
+        ttk.Button(frm_btns, text="取消", width=10, command=self.win.destroy).pack(
             side="left", padx=10,
         )
 
@@ -2200,7 +2202,7 @@ class RemoveBgDialog:
             r, g, b, _a = self.original.getpixel((ox, oy))
             self._bg_color = (r, g, b)
             self.lbl_info.config(
-                text=f"背景色: RGB({r}, {g}, {b})", fg="#333333",
+                text=f"背景色: RGB({r}, {g}, {b})", foreground="#333333",
             )
             self._apply_removal()
 

@@ -1,6 +1,7 @@
 import csv
 import tempfile
 import unittest
+import ttkbootstrap as ttk
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,10 @@ import tkinter as tk
 
 
 class CalcTests(unittest.TestCase):
+    def setUp(self):
+        # Styles belong to the Tcl interpreter created by each test.
+        ttk.Style.instance = None
+
     def test_balance_parser(self):
         self.assertEqual(parse_balance("1,234"), 1234)
         for value in ("", "12,34", "1 | 2", "-4", "1.5", "O24"):
@@ -202,7 +207,7 @@ class CalcTests(unittest.TestCase):
                 app.engine._running = True
                 app._msg_queue.append(("status", False))
                 app._poll_queue()
-                self.assertEqual(app.btn_toggle.cget("bg"), "#F44336")
+                self.assertEqual(app.btn_toggle.cget("style"), "danger.TButton")
                 app.engine._running = False
         finally:
             app.on_close()
@@ -371,7 +376,7 @@ class CalcTests(unittest.TestCase):
             app._show_calc()
             with patch.object(BackgroundCalc, "running", new_callable=lambda: property(lambda _: True)), patch.object(app.background, "reset") as reset, patch("gui.messagebox.showinfo"):
                 app._update_calc_view()
-                self.assertEqual(app._calc_reset.cget("state"), "disabled")
+                self.assertEqual(str(app._calc_reset.cget("state")), "disabled")
                 app._reset_calc()
                 reset.assert_not_called()
         finally:

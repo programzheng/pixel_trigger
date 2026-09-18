@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import tkinter as tk
+import ttkbootstrap as ttk
 from PIL import Image
 
 from gui import App, ComboEditor
@@ -12,10 +13,18 @@ from models import Action, ActionType, Combo, PositionControl, Profile, TriggerM
 
 
 class ComboScaleDisplayTest(unittest.TestCase):
+    def setUp(self):
+        # Each test owns a new Tcl interpreter; styles cannot cross roots.
+        ttk.Style.instance = None
+
     def test_combo_log_view_is_bounded_live_and_separate(self):
         with patch.object(App, "_load_initial_profile"):
             app = App()
         app.root.withdraw()
+        self.assertIsInstance(app.root, ttk.Window)
+        self.assertEqual(app.root.style.theme.name, "litera")
+        self.assertEqual(app.btn_toggle.cget("style"), "success.TButton")
+        self.assertEqual(app.btn_background.cget("style"), "success.TButton")
         try:
             combo, other = Combo(name="釣魚"), Combo(name="其他")
             app.profile = Profile(combos=[combo, other])
