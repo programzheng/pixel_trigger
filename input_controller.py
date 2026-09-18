@@ -4,10 +4,19 @@ from __future__ import annotations
 
 import random
 import time
+import winsound
 
 import pyautogui
 
 pyautogui.PAUSE = 0
+
+
+def play_sound(delay_min=0, delay_max=0, stop_event=None):
+    if not _interruptible_sleep(random.uniform(delay_min, delay_max), stop_event):
+        return
+    if stop_event and stop_event.is_set():
+        return
+    winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NOSTOP)
 
 
 # ── 滑鼠操作 ─────────────────────────────────────────────

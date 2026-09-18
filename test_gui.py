@@ -3,8 +3,6 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from unittest.mock import Mock
-from collections import deque
 
 import tkinter as tk
 from PIL import Image
@@ -107,29 +105,37 @@ class ComboScaleDisplayTest(unittest.TestCase):
         finally:
             root.destroy()
 
-    def test_o_sound_only_on_detection_transition_and_when_enabled(self):
-        app = App.__new__(App)
-        app._debug_data = {}
-        app._msg_queue = deque()
-        app.engine = SimpleNamespace(running=True)
-        app.profile = Profile()
-        app.root = Mock()
-        app._sound_enabled = Mock()
-        app._sound_enabled.get.return_value = True
-        with patch("gui.winsound.PlaySound") as sound:
-            for found in (False, True, True, False, True):
-                app._on_debug_info("combo", found, 0.9)
-            app._poll_queue()
-            self.assertEqual(sound.call_count, 2)
-            app._sound_enabled.get.return_value = False
-            app._on_debug_info("other", True, 0.9)
-            app._poll_queue()
-            self.assertEqual(sound.call_count, 2)
-            app._sound_enabled.get.return_value = True
-            app.engine.running = False
-            app._on_debug_info("stopped", True, 0.9)
-            app._poll_queue()
-            self.assertEqual(sound.call_count, 2)
+    def test_sound_action_editor_save_and_reopen(self):
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "trigger.png"
+                Image.new("RGB", (50, 40), "red").save(path)
+                combo = Combo(image_path=str(path), action=Action(action_type=ActionType.PLAY_SOUND),
+                              position_control=PositionControl(region=(0, 0, 50, 40)))
+                with patch.object(tk.Toplevel, "wait_window"):
+                    editor = ComboEditor(root, combo)
+                    for trigger in TriggerMode:
+                        editor.var_trigger.set(trigger.value)
+                        editor._on_action_type_change()
+                        self.assertEqual(editor.var_action_type.get(), ActionType.PLAY_SOUND.value)
+                        self.assertEqual(editor.frm_delay.winfo_manager(), "pack")
+                        for widget in (editor.frm_mouse_btn, editor.frm_key, editor.frm_duration,
+                                       editor.frm_interval, editor.frm_target):
+                            self.assertEqual(widget.winfo_manager(), "")
+                    editor.var_trigger.set(TriggerMode.ON_APPEAR.value)
+                    editor._ok()
+                    self.assertTrue(editor.result)
+                    restored = Combo.from_dict(combo.to_dict())
+                    editor = ComboEditor(root, restored)
+                try:
+                    self.assertEqual(editor.var_action_type.get(), ActionType.PLAY_SOUND.value)
+                    self.assertEqual(restored.action.action_type, ActionType.PLAY_SOUND)
+                finally:
+                    editor.win.destroy()
+        finally:
+            root.destroy()
 
     def test_position_selection_and_preview_preserve_transparency(self):
         root = tk.Tk()

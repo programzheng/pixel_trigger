@@ -86,6 +86,9 @@ class HookEngine:
             if get_window_region(profile.window_handle, profile.window_pid) is None:
                 raise ValueError("目標視窗不可用，請還原視窗或重新選擇。")
         for combo in profile.combos:
+            if combo.enabled and combo.action.action_type == ActionType.PLAY_SOUND:
+                if not 0 <= combo.action.delay_min <= combo.action.delay_max < float("inf"):
+                    raise ValueError("音效延遲必須是有限非負數，且最小值不能大於最大值。")
             if combo.enabled and combo.action.action_type == ActionType.CLICK_IMAGE:
                 action = combo.action
                 if not 0 <= action.target_threshold <= 1:
@@ -406,6 +409,8 @@ class HookEngine:
             input_controller.key_hold(
                 action.key, action.duration, stop_event
             )
+        elif at == ActionType.PLAY_SOUND:
+            input_controller.play_sound(action.delay_min, action.delay_max, stop_event)
 
     def _click_target_image(self, combo: Combo, stop_event: threading.Event):
         action = combo.action
@@ -474,6 +479,11 @@ class HookEngine:
 
         if combo.trigger.tracks_marker:
             self._position_control_loop(combo, stop_event)
+            return
+
+        if at == ActionType.PLAY_SOUND:
+            self._execute_action_once_unlocked(combo, stop_event)
+            self._wait_until_stopped(stop_event)
             return
 
         if at == ActionType.HOLD_MOUSE:
@@ -635,7 +645,7 @@ class HookEngine:
     def _controlled_action_loop(self, combo: Combo, stop_event: threading.Event):
         """條件成立期間依一般動作參數執行；單擊類每次成立只執行一次。"""
         action = combo.action
-        single = action.action_type in (ActionType.CLICK, ActionType.CLICK_IMAGE, ActionType.KEY_PRESS)
+        single = action.action_type in (ActionType.CLICK, ActionType.CLICK_IMAGE, ActionType.KEY_PRESS, ActionType.PLAY_SOUND)
         try:
             while not stop_event.is_set() and not self._stop_event.is_set():
                 # 單擊與點圖本身有延遲；其他動作在此套用相同設定。

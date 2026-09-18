@@ -8,7 +8,6 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import time
 import warnings
-import winsound
 import tkinter as tk
 from datetime import datetime
 
@@ -51,6 +50,7 @@ ACTION_LABELS = {
     ActionType.KEY_PRESS: "鍵盤 按一下",
     ActionType.RAPID_KEY: "鍵盤 連續按",
     ActionType.HOLD_KEY: "鍵盤 長按",
+    ActionType.PLAY_SOUND: "播放音效",
 }
 
 MOUSE_BTN_LABELS = {
@@ -100,7 +100,6 @@ class App:
         self._combo_active: dict[str, bool] = {}
         # debug 模式：顯示即時信心度 + 螢幕框線
         self._debug_mode = tk.BooleanVar(value=False)
-        self._sound_enabled = tk.BooleanVar(value=False)
         # combo_id → (found, confidence, match_rect|None) 最新偵測結果
         self._debug_data: dict[str, tuple] = {}
         self._combo_logs = {}
@@ -216,7 +215,6 @@ class App:
             frm_status, text="Debug 框線", variable=self._debug_mode,
             command=self._on_debug_mode_toggle,
         ).pack(side="right", padx=10)
-        tk.Checkbutton(frm_status, text="O 音效", variable=self._sound_enabled).pack(side="right")
 
         # --- 啟動/停止 ---
         frm_ctrl = tk.Frame(self.root, padx=10, pady=10)
@@ -426,6 +424,8 @@ class App:
 
     def _action_summary(self, action: Action) -> str:
         label = ACTION_LABELS.get(action.action_type, "?")
+        if action.action_type == ActionType.PLAY_SOUND:
+            return label
         if action.action_type in (ActionType.CLICK, ActionType.CLICK_IMAGE, ActionType.RAPID_CLICK, ActionType.HOLD_MOUSE):
             btn = MOUSE_BTN_LABELS.get(action.mouse_button, "?")
             return f"{label} ({btn})"
@@ -692,11 +692,8 @@ class App:
         self._msg_queue.append(("triggered", combo_id, active))
 
     def _on_debug_info(self, combo_id: str, found: bool, confidence: float, match_rect=None):
-        previous = self._debug_data.get(combo_id)
         # 直接寫 dict（CPython GIL 保證 dict 寫入原子性）
         self._debug_data[combo_id] = (found, confidence, match_rect)
-        if found and (previous is None or not previous[0]):
-            self._msg_queue.append(("sound",))
 
     def _on_cycle_complete(self, count: int):
         self._msg_queue.append(("cycle", count))
@@ -713,13 +710,7 @@ class App:
         while self._msg_queue:
             msg = self._msg_queue.popleft()
             kind = msg[0]
-            if kind == "sound":
-                if self.engine.running and self._sound_enabled.get():
-                    try:
-                        winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC | winsound.SND_NOSTOP)
-                    except RuntimeError:
-                        pass  # 系統音效不可用時，不中斷自動化。
-            elif kind == "triggered":
+            if kind == "triggered":
                 _, combo_id, active = msg
                 self._combo_active[combo_id] = active
                 if not self._debug_mode.get() and self.tree.exists(combo_id):
@@ -1202,7 +1193,7 @@ class ComboEditor:
         self.lbl_band_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
             text="色帶判斷：排除箭頭與白／暗色後取樣。漏判時在容忍時間內維持動作；0 表示立即停止。辨識到停止比例仍立即停止。同色背景可能使箭頭辨識失敗。")
         self.lbl_control_hint = tk.Label(self.frm_position, wraplength=340, justify="left",
-            text="條件成立時：單擊／按一下／點圖執行一次；連點／長按依時間與間隔重複。條件失效立即取消。")
+            text="條件成立時：單擊／按一下／點圖／音效執行一次；連點／長按依時間與間隔重複。條件失效立即取消。")
         self.lbl_control_hint.pack(anchor="w")
         self.var_position_preview = tk.BooleanVar(value=True)
         self._position_preview_job = None
@@ -1473,6 +1464,8 @@ class ComboEditor:
             key = self.var_key.get().strip()
             delay_min = self._to_float(self.var_delay_min.get())
             delay_max = self._to_float(self.var_delay_max.get())
+            if action_type == ActionType.PLAY_SOUND and not 0 <= delay_min <= delay_max < float("inf"):
+                raise ValueError("音效延遲必須是有限非負數，且最小值不能大於最大值。")
 
             target_image_path = self.var_target_image.get().strip()
             target_threshold = self.combo.action.target_threshold

@@ -38,6 +38,7 @@ class ActionType(str, Enum):
     KEY_PRESS = "key_press"            # 按一下鍵盤
     RAPID_KEY = "rapid_key"            # 連續按鍵
     HOLD_KEY = "hold_key"              # 長按鍵盤鍵
+    PLAY_SOUND = "play_sound"          # 播放系統音效
 
 
 class MouseButton(str, Enum):
