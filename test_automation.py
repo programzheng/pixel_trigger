@@ -10,6 +10,40 @@ from models import Action, ActionType, Combo, Profile, TriggerMode, PositionCont
 
 
 class ResponsiveAutomationTest(unittest.TestCase):
+    def test_sound_is_a_combo_action_with_delay_cancellation_and_rearming(self):
+        combo = Combo(image_path="trigger.png", action=Action(action_type=ActionType.PLAY_SOUND))
+        engine = HookEngine()
+        engine.set_profile(Profile(combos=[combo]))
+        frame = np.zeros((60, 60))
+        with patch.object(engine._capture, "match_template", side_effect=[
+                (False, 0.1, None), (True, 0.9, (30, 30)), (True, 0.9, (30, 30)),
+                (False, 0.1, None), (True, 0.9, (30, 30))]), \
+                patch.object(engine._capture, "get_match_size", return_value=(50, 40)), \
+                patch.object(input_controller.winsound, "PlaySound") as sound:
+            for _ in range(5):
+                engine._process_combo(combo, frame, None)
+            self.assertEqual(sound.call_count, 2)
+            combo.action.action_type = ActionType.CLICK
+            with patch.object(input_controller, "mouse_click"):
+                engine._execute_action_once(combo)
+            self.assertEqual(sound.call_count, 2)
+            combo.action.action_type = ActionType.PLAY_SOUND
+            stopped = threading.Event()
+            stopped.set()
+            engine._execute_action_once_unlocked(combo, stopped)
+            self.assertEqual(sound.call_count, 2)
+            stopped.clear()
+            combo.trigger = TriggerMode.WHILE_VISIBLE
+            with patch.object(engine, "_wait_until_stopped", side_effect=lambda evt: evt.set()):
+                engine._continuous_action_loop(combo, stopped)
+            self.assertEqual(sound.call_count, 3)
+            stopped.clear()
+            combo.action.delay_min = combo.action.delay_max = 1
+            with patch.object(input_controller, "_interruptible_sleep", return_value=False) as delay:
+                engine._execute_action_once_unlocked(combo, stopped)
+                delay.assert_called_once_with(1, stopped)
+            self.assertEqual(sound.call_count, 3)
+
     def test_combo_logs_distinguish_modes_and_throttle_repeated_reasons(self):
         records = []
         engine = HookEngine(on_log=lambda cid, message, level: records.append((cid, message)))
@@ -95,7 +129,8 @@ class ResponsiveAutomationTest(unittest.TestCase):
                                       (ActionType.KEY_PRESS, "key_press"),
                                       (ActionType.RAPID_KEY, "key_rapid_press"),
                                       (ActionType.HOLD_KEY, "key_hold"),
-                                      (ActionType.CLICK_IMAGE, "_click_target_image")):
+                                      (ActionType.CLICK_IMAGE, "_click_target_image"),
+                                      (ActionType.PLAY_SOUND, "play_sound")):
                 with self.subTest(trigger=trigger, action=action_type):
                     engine = HookEngine()
                     combo = Combo(trigger=trigger, action=Action(action_type=action_type,
