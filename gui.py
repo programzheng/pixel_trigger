@@ -83,9 +83,22 @@ def _create_log_logger():
     return logger
 
 
+def _system_theme():
+    try:
+        import winreg
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            light, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        return "darkly" if light == 0 else "litera"
+    except (ImportError, OSError):
+        return "litera"
+
+
 class App:
     def __init__(self):
-        self.root = ttk.Window(themename="litera", hdpi=False)
+        self.root = ttk.Window(themename=_system_theme(), hdpi=False)
+        self._theme_manual = False
         self.root.title("PixelTrigger")
         self.root.geometry("900x800")
         self.root.resizable(True, True)
@@ -131,6 +144,7 @@ class App:
         self._load_initial_profile()
         # 啟動 main thread 的 queue 輪詢
         self._poll_queue()
+        self._follow_system_theme()
 
     # ══════════════════════════════════════════════════════
     #  UI 建構
@@ -152,6 +166,13 @@ class App:
         ttk.Button(frm_profile, text="儲存", width=5, command=self._save_profile).pack(side="left", padx=2)
         ttk.Button(frm_profile, text="另存", width=5, command=self._save_profile_as).pack(side="left", padx=2)
         ttk.Button(frm_profile, text="新增", width=5, command=self._new_profile).pack(side="left", padx=2)
+        self.btn_theme = ttk.Button(
+            frm_profile,
+            text="切換亮色" if self.root.style.theme.name == "darkly" else "切換深色",
+            bootstyle="primary",
+            command=self._toggle_theme,
+        )
+        self.btn_theme.pack(side="right", padx=2)
 
         # --- Combo 列表 ---
         frm_combos = ttk.Labelframe(self.root, text="Combo 列表", padding=(10, 5))
@@ -199,7 +220,7 @@ class App:
         self.cmb_window.bind("<<ComboboxSelected>>", self._on_window_selected)
         ttk.Button(window_row, text="重新整理", command=self._refresh_windows).pack(side="left")
         ttk.Label(frm_region, text="選視窗後忽略 XY 並自動跟隨；需保持可見。最小化／關閉：主動停止，背景暫停讀取。",
-                 foreground="#666666").pack(anchor="w")
+                 bootstyle="default").pack(anchor="w")
         grid = ttk.Frame(frm_region)
         grid.pack(fill="x")
         labels = ["X:", "Y:", "寬:", "高:"]
@@ -223,7 +244,7 @@ class App:
         frm_status = ttk.Frame(self.root, padding=(10, 5))
         frm_status.pack(fill="x")
 
-        self.lbl_cycles = ttk.Label(frm_status, text="主動掃描: 0 次", foreground="#666666")
+        self.lbl_cycles = ttk.Label(frm_status, text="主動掃描: 0 次", bootstyle="default")
         self.lbl_cycles.pack(side="right")
 
         # --- 啟動/停止 ---
@@ -234,7 +255,7 @@ class App:
         )
         self.btn_toggle.pack(fill="x")
 
-        self.lbl_hotkey = ttk.Label(frm_ctrl, text="", foreground="#666666")
+        self.lbl_hotkey = ttk.Label(frm_ctrl, text="", bootstyle="default")
         self.lbl_hotkey.pack(side="bottom", pady=(5, 0))
         self.btn_background = ttk.Button(
             frm_ctrl, text="啟動背景偵測", bootstyle="success",
@@ -258,6 +279,21 @@ class App:
     # ══════════════════════════════════════════════════════
     #  Profile 操作
     # ══════════════════════════════════════════════════════
+
+    def _toggle_theme(self):
+        self._theme_manual = True
+        dark = self.root.style.theme.name == "litera"
+        self.root.style.theme_use("darkly" if dark else "litera")
+        self.btn_theme.config(text="切換亮色" if dark else "切換深色")
+
+    def _follow_system_theme(self):
+        if self._theme_manual or self._closing:
+            return
+        theme = _system_theme()
+        if self.root.style.theme.name != theme:
+            self.root.style.theme_use(theme)
+            self.btn_theme.config(text="切換亮色" if theme == "darkly" else "切換深色")
+        self.root.after(2000, self._follow_system_theme)
 
     def _stop_all(self):
         if self.engine.running:
@@ -1145,7 +1181,7 @@ class ComboEditor:
         )
         self.btn_rmbg.pack(side="right", padx=5)
         self.btn_rmbg.pack_forget()  # 初始隱藏，有圖才顯示
-        self.lbl_preview = ttk.Label(frm_preview, text="", foreground="#888888", anchor="w")
+        self.lbl_preview = ttk.Label(frm_preview, text="", bootstyle="default", anchor="w")
         self.lbl_preview.pack(side="left", fill="x", expand=True)
 
         self._preview_photo = None  # 防止 GC 回收 PhotoImage
@@ -1256,7 +1292,7 @@ class ComboEditor:
         ttk.Entry(target_buttons, textvariable=self.var_target_threshold, width=5).pack(side="left")
         self.lbl_target_thumb = ttk.Label(self.frm_target)
         self.lbl_target_thumb.pack(anchor="w")
-        ttk.Label(self.frm_target, text="找到目標後點擊中心；找不到就不點擊。", foreground="#666666").pack(anchor="w")
+        ttk.Label(self.frm_target, text="找到目標後點擊中心；找不到就不點擊。", bootstyle="default").pack(anchor="w")
         if combo.action.target_image_path:
             self._update_target_preview(combo.action.target_image_path)
 
@@ -1469,9 +1505,9 @@ class ComboEditor:
         self.win.deiconify()
         if text:
             self.var_verify_text.set(text)
-            self.lbl_preview.config(foreground="#333333")
+            self.lbl_preview.config(bootstyle="default")
         else:
-            self.lbl_preview.config(text="螢幕上找不到模板，請先確認遊戲畫面已顯示", foreground="#cc0000")
+            self.lbl_preview.config(text="螢幕上找不到模板，請先確認遊戲畫面已顯示", bootstyle="danger")
             return
         # 還原預覽文字
         path = image_path
@@ -1479,7 +1515,7 @@ class ComboEditor:
             from PIL import Image
             img = Image.open(path)
             w, h = img.size
-            self.lbl_preview.config(text=f"{Path(path).name} ({w}x{h})", foreground="#333333")
+            self.lbl_preview.config(text=f"{Path(path).name} ({w}x{h})", bootstyle="default")
         except Exception:
             pass
 
@@ -1493,7 +1529,7 @@ class ComboEditor:
             return
         w, h = img.size
         self.lbl_preview.config(
-            text=f"{Path(path).name} ({w}x{h})", foreground="#333333",
+            text=f"{Path(path).name} ({w}x{h})", bootstyle="default",
         )
         self.btn_rmbg.pack(side="right", padx=5)
         # 縮放到最大 120px 高
@@ -1517,7 +1553,7 @@ class ComboEditor:
             text = ocr_read_image(path)
             self.var_verify_text.set(text)
             self.lbl_preview.config(
-                text=f"{Path(path).name} ({w}x{h})", foreground="#333333",
+                text=f"{Path(path).name} ({w}x{h})", bootstyle="default",
             )
 
     def _update_target_preview(self, path: str):
@@ -1580,7 +1616,7 @@ class ComboEditor:
             img = None
 
         if img is None:
-            self.lbl_preview.config(text="剪貼簿中沒有圖片", foreground="red")
+            self.lbl_preview.config(text="剪貼簿中沒有圖片", bootstyle="danger")
             return
 
         profile_manager.TEMPLATES_DIR.mkdir(exist_ok=True)
@@ -2167,7 +2203,7 @@ class RemoveBgDialog:
         ).pack(side="left", fill="x", expand=True)
 
         # ── 狀態 ──
-        self.lbl_info = ttk.Label(self.win, text="尚未選取背景色", foreground="#888888")
+        self.lbl_info = ttk.Label(self.win, text="尚未選取背景色", bootstyle="default")
         self.lbl_info.pack(padx=10)
 
         # ── 按鈕 ──
@@ -2202,7 +2238,7 @@ class RemoveBgDialog:
             r, g, b, _a = self.original.getpixel((ox, oy))
             self._bg_color = (r, g, b)
             self.lbl_info.config(
-                text=f"背景色: RGB({r}, {g}, {b})", foreground="#333333",
+                text=f"背景色: RGB({r}, {g}, {b})", bootstyle="default",
             )
             self._apply_removal()
 

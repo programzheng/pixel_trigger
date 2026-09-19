@@ -8,7 +8,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from PIL import Image
 
-from gui import App, ComboEditor
+from gui import App, ComboEditor, _system_theme
 from models import Action, ActionType, Combo, PositionControl, Profile, TriggerMode
 
 
@@ -16,6 +16,62 @@ class ComboScaleDisplayTest(unittest.TestCase):
     def setUp(self):
         # Each test owns a new Tcl interpreter; styles cannot cross roots.
         ttk.Style.instance = None
+        theme_patch = patch("gui._system_theme", return_value="litera")
+        self.system_theme = theme_patch.start()
+        self.addCleanup(theme_patch.stop)
+
+    def test_system_theme_registry_and_fallback(self):
+        import winreg
+        with patch.object(winreg, "OpenKey"), patch.object(winreg, "QueryValueEx") as read:
+            for value, expected in ((0, "darkly"), (1, "litera")):
+                read.return_value = value, winreg.REG_DWORD
+                self.assertEqual(_system_theme(), expected)
+            read.side_effect = FileNotFoundError()
+            self.assertEqual(_system_theme(), "litera")
+
+    def test_system_theme_follows_changes_until_manual_switch(self):
+        self.system_theme.return_value = "darkly"
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        app.root.withdraw()
+        try:
+            self.assertEqual(app.root.style.theme.name, "darkly")
+            self.system_theme.return_value = "litera"
+            app._follow_system_theme()
+            self.assertEqual(app.root.style.theme.name, "litera")
+            app.btn_theme.invoke()
+            app._follow_system_theme()
+            self.assertEqual(app.root.style.theme.name, "darkly")
+        finally:
+            app.on_close()
+
+    def test_theme_button_switches_live_windows_without_changing_combos(self):
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        app.root.withdraw()
+        try:
+            combo = Combo(name="主題測試")
+            app.profile = Profile(combos=[combo])
+            app._refresh_combo_tree()
+            app.tree.selection_set(combo.id)
+            app._show_log()
+            with patch.object(tk.Toplevel, "wait_window"):
+                editor = ComboEditor(app.root, combo)
+            for theme, text in (("darkly", "切換亮色"), ("litera", "切換深色")):
+                app.btn_theme.invoke()
+                app.root.update_idletasks()
+                self.assertEqual(app.root.style.theme.name, theme)
+                self.assertEqual(app.btn_theme.cget("text"), text)
+                self.assertEqual(app.tree.selection(), (combo.id,))
+                self.assertIs(app.profile.combos[0], combo)
+                self.assertEqual(editor.lbl_preview.cget("foreground"), "")
+                self.assertEqual(app.root.style.lookup("TLabel", "foreground"),
+                                 app.root.style.colors.fg)
+                self.assertEqual(app._log_text.cget("background"),
+                                 app.root.style.colors.inputbg)
+            editor.win.destroy()
+        finally:
+            app.on_close()
 
     def test_combo_log_view_is_bounded_live_and_separate(self):
         with patch.object(App, "_load_initial_profile"):
