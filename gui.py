@@ -2351,19 +2351,20 @@ class DebugOverlay:
         self.canvas.delete("all")
         for x, y, w, h, name, found, conf in rects:
             color = "#00FF00" if found else "#FF4444"
+            edge = 3
             # 框線
             self.canvas.create_rectangle(
-                x, y, x + w, y + h,
-                outline=color, width=3,
+                x - edge, y - edge, x + w + edge, y + h + edge,
+                outline=color, width=2,
             )
             # 標籤背景（用色塊遮住以利閱讀）
             label = f" {name}  {conf:.2f} "
             self.canvas.create_rectangle(
-                x, y - 20, x + len(label) * 7, y,
+                x - edge, y - edge - 20, x + len(label) * 7, y - edge,
                 fill=color, outline="",
             )
             self.canvas.create_text(
-                x + 3, y - 10, text=label.strip(),
+                x, y - edge - 10, text=label.strip(),
                 fill="black", anchor="w",
                 font=("Arial", 10, "bold"),
             )
