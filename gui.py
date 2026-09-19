@@ -325,8 +325,7 @@ class App:
             for key, event in ((self.profile.hotkey, "hotkey"),
                                (self.profile.background_hotkey, "background_hotkey")):
                 self._hotkeys.append(keyboard.add_hotkey(
-                    key, lambda event=event: self._msg_queue.append((event,)),
-                    trigger_on_release=True))
+                    key, lambda event=event: self._msg_queue.append((event,))))
         except (ValueError, KeyError) as error:
             self._unregister_hotkeys()
             messagebox.showerror("快捷鍵設定錯誤", str(error))

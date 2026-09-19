@@ -29,6 +29,24 @@ class ComboScaleDisplayTest(unittest.TestCase):
             read.side_effect = FileNotFoundError()
             self.assertEqual(_system_theme(), "litera")
 
+    def test_global_hotkeys_queue_events_on_key_press(self):
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        app.root.withdraw()
+        callbacks = []
+        with patch("gui.keyboard.add_hotkey",
+                   side_effect=lambda key, callback: callbacks.append(callback) or key), \
+                patch("gui.keyboard.remove_hotkey"):
+            try:
+                app._register_hotkeys()
+                self.assertEqual(len(callbacks), 2)
+                callbacks[0]()
+                callbacks[1]()
+                self.assertEqual(list(app._msg_queue)[-2:], [("hotkey",),
+                                                            ("background_hotkey",)])
+            finally:
+                app.on_close()
+
     def test_system_theme_follows_changes_until_manual_switch(self):
         self.system_theme.return_value = "darkly"
         with patch.object(App, "_load_initial_profile"):
