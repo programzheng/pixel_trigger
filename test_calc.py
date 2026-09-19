@@ -208,6 +208,10 @@ class CalcTests(unittest.TestCase):
             with patch.object(app.background.capture, "get_match_scale", return_value=.8), patch.object(app.engine, "get_match_scale", return_value=1.2):
                 app._msg_queue.append(("background_read", combo.id, "餘額 324"))
                 app._poll_queue()
+                self.assertEqual(len(app._combo_logs[combo.id]), 1)
+                app._msg_queue.append(("background_read", combo.id, "餘額 324"))
+                app._poll_queue()
+                self.assertEqual(len(app._combo_logs[combo.id]), 1)
                 self.assertEqual(app.tree.set(combo.id, "scale"), "80.0%")
                 app._stop()
                 self.assertEqual(app.tree.set(combo.id, "status"), "餘額 324")

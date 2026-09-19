@@ -1062,11 +1062,13 @@ class App:
                 )
             elif kind in ("background_read", "background_record"):
                 _, cid, message = msg
+                previous = self._background_results.get(cid)
                 self._background_results[cid] = message
                 if self.tree.exists(cid):
                     self.tree.set(cid, "status", message)
-                if kind == "background_record":
-                    self._on_log(cid, message)
+                if kind == "background_record" or message != previous:
+                    level = "failure" if message.startswith("未取得有效數字") else "info"
+                    self._on_log(cid, message, level)
             elif kind == "background_error":
                 messagebox.showerror("背景記帳已停止", msg[1])
             elif kind == "hotkey":
