@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import cv2
@@ -137,6 +139,10 @@ class ScreenCapture:
         self._last_matches: dict[str, tuple] = {}
         self._scale_offsets: dict[str, int] = {}
         self._ocr_lock = threading.Lock()
+        self._tesseract_path = shutil.which("tesseract")
+        if not self._tesseract_path:
+            standard_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            self._tesseract_path = standard_path if os.path.isfile(standard_path) else None
         # easyocr Reader（lazy init，首次使用時才載入）
         self._ocr_reader = None
 
@@ -387,17 +393,41 @@ class ScreenCapture:
         roi = frame[y:y + height, x:x + width]
         enlarged = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
         with self._ocr_lock:
-            self._ensure_ocr()
-            results = self._ocr_reader.readtext(enlarged, allowlist="0123456789,")
-        text = " | ".join(item[1] for item in results)
-        confidence = float(results[0][2]) if len(results) == 1 else 0.0
-        if len(results) != 1 or confidence < combo.text_threshold:
+            result = self._tesseract_balance(cv2.resize(
+                roi, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC))
+            if result is None:
+                self._ensure_ocr()
+                results = self._ocr_reader.readtext(enlarged, allowlist="0123456789,")
+                result = (results[0][1], float(results[0][2])) if len(results) == 1 else None
+        text, confidence = result or ("", 0.0)
+        if result is None or confidence < combo.text_threshold:
             return None, text or "OCR 無有效數字", confidence, roi
         try:
             value = parse_balance(text)
         except ValueError:
             return None, text, confidence, roi
         return value, text, confidence, roi
+
+    def _tesseract_balance(self, image):
+        if not self._tesseract_path:
+            return None
+        ok, png = cv2.imencode(".png", image)
+        if not ok:
+            return None
+        try:
+            completed = subprocess.run(
+                [self._tesseract_path, "stdin", "stdout", "--psm", "7", "-l", "eng",
+                 "-c", "tessedit_char_whitelist=0123456789,", "tsv"],
+                input=png.tobytes(), capture_output=True, timeout=5,
+            )
+            if completed.returncode:
+                return None
+            rows = [line.split("\t") for line in completed.stdout.decode("utf-8").splitlines()[1:]]
+            words = [(row[11].strip(), float(row[10]) / 100) for row in rows
+                     if len(row) > 11 and row[11].strip()]
+            return words[0] if len(words) == 1 else None
+        except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
+            return None
 
     def get_balance_debug(self):
         return getattr(self._match_state, "balance_debug", (False, 0.0, None, None))
