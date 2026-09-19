@@ -2316,8 +2316,6 @@ class DebugOverlay:
         sh = root.winfo_screenheight()
         self.win.geometry(f"{sw}x{sh}+0+0")
         self.win.attributes("-topmost", True)
-        self.win.attributes("-transparentcolor", "black")
-        self.win.configure(bg="black")
 
         self.canvas = tk.Canvas(
             self.win, bg="black", highlightthickness=0,
@@ -2327,7 +2325,13 @@ class DebugOverlay:
 
         # 設為點擊穿透，不擋住滑鼠操作
         self.win.update_idletasks()
+        self._sync_transparency()
         self._set_click_through()
+
+    def _sync_transparency(self):
+        background = self.canvas.cget("background")
+        self.win.configure(bg=background)
+        self.win.attributes("-transparentcolor", background)
 
     def _set_click_through(self):
         try:
@@ -2342,6 +2346,7 @@ class DebugOverlay:
 
     def update_rects(self, rects: list):
         """更新框線。rects: list of (x, y, w, h, name, found, confidence)"""
+        self._sync_transparency()
         self.canvas.delete("all")
         for x, y, w, h, name, found, conf in rects:
             color = "#00FF00" if found else "#FF4444"

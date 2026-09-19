@@ -8,7 +8,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from PIL import Image
 
-from gui import App, ComboEditor, _system_theme
+from gui import App, ComboEditor, DebugOverlay, _system_theme
 from models import Action, ActionType, Combo, PositionControl, Profile, TriggerMode
 
 
@@ -71,6 +71,23 @@ class ComboScaleDisplayTest(unittest.TestCase):
                                  app.root.style.colors.inputbg)
             editor.win.destroy()
         finally:
+            app.on_close()
+
+    def test_debug_overlay_transparency_follows_theme_canvas(self):
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        app.root.withdraw()
+        overlay = DebugOverlay(app.root)
+        try:
+            for theme in ("darkly", "litera"):
+                app.root.style.theme_use(theme)
+                app.root.update_idletasks()
+                overlay.update_rects([])
+                background = overlay.canvas.cget("background")
+                self.assertEqual(overlay.win.cget("background"), background)
+                self.assertEqual(overlay.win.attributes("-transparentcolor"), background)
+        finally:
+            overlay.destroy()
             app.on_close()
 
     def test_combo_log_view_is_bounded_live_and_separate(self):
