@@ -11,7 +11,7 @@ import numpy as np
 
 from automation import HookEngine
 from calc import BackgroundCalc, FIELDS, Ledger, parse_balance
-from gui import App, ComboEditor
+from gui import App, ComboEditor, DebugOverlay
 from models import Combo, Profile
 from screen_capture import ScreenCapture
 import tkinter as tk
@@ -431,6 +431,14 @@ class CalcTests(unittest.TestCase):
                 overlay.return_value.destroy.assert_called_once()
         finally:
             app.on_close()
+
+    def test_debug_frame_is_drawn_outside_capture_region(self):
+        overlay = DebugOverlay.__new__(DebugOverlay)
+        overlay.canvas = Mock()
+        overlay._sync_transparency = Mock()
+        overlay.update_rects([(10, 20, 30, 40, "OCR", True, .8)])
+        self.assertEqual(overlay.canvas.create_rectangle.call_args_list[0].args,
+                         (7, 17, 43, 63))
 
 
 if __name__ == "__main__":
