@@ -1287,10 +1287,12 @@ class ComboEditor:
         target_buttons = ttk.Frame(self.frm_target)
         target_buttons.pack(fill="x")
         ttk.Button(target_buttons, text="瀏覽", command=lambda: self._browse_image(target=True)).pack(side="left")
-        ttk.Button(target_buttons, text="框選", command=lambda: self._capture_image(target=True)).pack(side="left")
+        ttk.Button(target_buttons, text="框選螢幕", command=lambda: self._capture_image(target=True)).pack(side="left")
         ttk.Label(target_buttons, text="閾值:").pack(side="left", padx=3)
         self.var_target_threshold = tk.StringVar(value=str(combo.action.target_threshold))
         ttk.Entry(target_buttons, textvariable=self.var_target_threshold, width=5).pack(side="left")
+        ttk.Button(self.frm_target, text="框選觸發圖片內的圖",
+                   command=self._select_target_region).pack(anchor="w", pady=3)
         self.lbl_target_thumb = ttk.Label(self.frm_target)
         self.lbl_target_thumb.pack(anchor="w")
         ttk.Label(self.frm_target, text="找到目標後點擊中心；找不到就不點擊。", bootstyle="default").pack(anchor="w")
@@ -1566,6 +1568,31 @@ class ComboEditor:
             self.lbl_target_thumb.config(image=self._target_photo, text="")
         except Exception:
             self.lbl_target_thumb.config(image="", text="無法讀取目標圖片")
+
+    def _select_target_region(self):
+        try:
+            with Image.open(self.var_image.get().strip()) as image:
+                image = image.convert("RGBA")
+        except (OSError, ValueError):
+            messagebox.showinfo("提示", "請先指定有效的觸發圖片。", parent=self.win)
+            return
+        try:
+            selector = ImageRegionSelector(
+                self.win, image, hint="拖曳框選要點擊的按鈕或圖片。ESC 取消。")
+        finally:
+            self.win.grab_set()
+        if not selector.result:
+            return
+        x, y, w, h = selector.result
+        try:
+            profile_manager.ensure_dirs()
+            path = profile_manager.TEMPLATES_DIR / f"template_{time.time_ns()}.png"
+            image.crop((x, y, x + w, y + h)).save(path, "PNG")
+        except OSError as e:
+            messagebox.showerror("錯誤", f"儲存目標圖片失敗:\n{e}", parent=self.win)
+            return
+        self.var_target_image.set(str(path))
+        self._update_target_preview(str(path))
 
     def _capture_image(self, target: bool = False):
         root = self.win.master
@@ -2116,7 +2143,7 @@ class RegionSelector:
 class ImageRegionSelector(RegionSelector):
     """在觸發圖片上拖曳框選，回傳原圖像素座標。"""
 
-    def __init__(self, parent, image):
+    def __init__(self, parent, image, hint="拖曳框選箭頭移動路徑；完整圖片仍用於定位。ESC 取消。"):
         self.result = None
         self._start_x = self._start_y = 0
         self._rect_id = None
@@ -2131,7 +2158,7 @@ class ImageRegionSelector(RegionSelector):
         self.overlay.transient(parent)
         self.overlay.attributes("-topmost", True)
         self.overlay.resizable(False, False)
-        ttk.Label(self.overlay, text="拖曳框選箭頭移動路徑；完整圖片仍用於定位。ESC 取消。",
+        ttk.Label(self.overlay, text=hint,
                  wraplength=max(200, self._display_size[0])).pack(padx=10, pady=8)
         self._photo = ImageTk.PhotoImage(image.resize(self._display_size))
         self.canvas = tk.Canvas(self.overlay, width=self._display_size[0],

@@ -330,11 +330,50 @@ class ComboScaleDisplayTest(unittest.TestCase):
                     editor._capture_image(target=True)
                 self.assertEqual(root.state(), "withdrawn")
                 self.assertNotEqual(editor.var_image.get(), editor.var_target_image.get())
+                trigger = Image.new("RGBA", (60, 50), (0, 0, 0, 0))
+                trigger.paste((255, 200, 0, 255), (20, 25, 40, 40))
+                trigger.save(editor.var_image.get())
+                with patch("gui.ImageRegionSelector") as selector, \
+                        patch("gui.profile_manager.TEMPLATES_DIR", Path(folder)):
+                    selector.return_value.result = (15, 20, 30, 25)
+                    button = next(w for w in editor.frm_target.winfo_children()
+                                  if isinstance(w, ttk.Button)
+                                  and w.cget("text") == "框選觸發圖片內的圖")
+                    button.invoke()
+                    selected_path = editor.var_target_image.get()
+                    with Image.open(selected_path) as cropped:
+                        self.assertEqual(cropped.tobytes(), trigger.crop((15, 20, 45, 45)).tobytes())
+                        self.assertEqual(cropped.size, (30, 25))
+                        self.assertEqual(cropped.mode, "RGBA")
+                    self.assertTrue(editor.lbl_target_thumb.cget("image"))
+                    selector.return_value.result = None
+                    button.invoke()
+                    self.assertEqual(editor.var_target_image.get(), selected_path)
+                    self.assertIs(editor.win.grab_current(), editor.win)
+                    selector.return_value.result = (15, 20, 30, 25)
+                    with patch.object(Image.Image, "save", side_effect=OSError("write failed")), \
+                            patch("gui.messagebox.showerror") as error:
+                        button.invoke()
+                        error.assert_called_once()
+                    self.assertEqual(editor.var_target_image.get(), selected_path)
+                    trigger_path = editor.var_image.get()
+                    editor.var_image.set("")
+                    selector.reset_mock()
+                    with patch("gui.messagebox.showinfo") as info:
+                        button.invoke()
+                        info.assert_called_once()
+                    selector.assert_not_called()
+                    editor.var_image.set(trigger_path)
                 editor.var_target_threshold.set("0.9")
                 editor._ok()
                 self.assertTrue(editor.result)
                 self.assertEqual(combo.action.target_threshold, 0.9)
                 self.assertTrue(Path(combo.action.target_image_path).exists())
+                restored = Combo.from_dict(combo.to_dict())
+                with patch.object(tk.Toplevel, "wait_window"):
+                    reopened = ComboEditor(root, restored)
+                self.assertEqual(reopened.var_target_image.get(), selected_path)
+                self.assertTrue(reopened.lbl_target_thumb.cget("image"))
         finally:
             root.destroy()
 
