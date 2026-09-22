@@ -184,6 +184,7 @@ class Combo:
     calc_region: tuple[int, int, int, int] | None = None
     daily_limit: int = 999
     warning_ratio: float = 0.9
+    low_confidence_confirmations: int = 3
 
     # 圖片偵測
     image_path: str = ""           # 模板圖片路徑
@@ -216,7 +217,8 @@ class Combo:
         if self.detection_mode == "background":
             d.update(detection_mode=self.detection_mode, calc_region=self.calc_region,
                      daily_limit=self.daily_limit, warning_ratio=self.warning_ratio,
-                     text_threshold=self.text_threshold)
+                     text_threshold=self.text_threshold,
+                     low_confidence_confirmations=self.low_confidence_confirmations)
         if self.trigger.tracks_marker:
             d["position_control"] = self.position_control.to_dict()
         if self.verify_text:
@@ -236,6 +238,7 @@ class Combo:
             calc_region=tuple(d["calc_region"]) if d.get("calc_region") else None,
             daily_limit=d.get("daily_limit", 999),
             warning_ratio=d.get("warning_ratio", 0.9),
+            low_confidence_confirmations=d.get("low_confidence_confirmations", 3),
             image_path=d.get("image_path", ""),
             match_threshold=d.get("match_threshold", 0.8),
             verify_text=d.get("verify_text", ""),

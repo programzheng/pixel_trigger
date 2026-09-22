@@ -33,6 +33,9 @@ def validate_combo(combo):
         raise ValueError("每日上限必須是正整數。")
     if not 0 < combo.warning_ratio <= 1 or not 0 <= combo.text_threshold <= 1:
         raise ValueError("預警比例與 OCR 信心度設定不正確。")
+    if (type(combo.low_confidence_confirmations) is not int
+            or not 2 <= combo.low_confidence_confirmations <= 10):
+        raise ValueError("低信心確認次數必須是 2~10 的整數。")
     if not 0 <= combo.match_threshold <= 1:
         raise ValueError("圖片閾值必須介於 0~1。")
 
@@ -269,11 +272,19 @@ class BackgroundCalc:
                         self._notify("background_debug", combo.id, found, score, icon_rect,
                                      value is not None, confidence, number_rect)
                         if value is None:
-                            self._notify("background_read", combo.id, f"未取得有效數字：{text}")
-                            continue
-                        if pending.get(combo.id) != value:
-                            pending[combo.id] = value
-                            self._notify("background_read", combo.id, f"讀到 {value}，等待再次確認")
+                            try:
+                                value = parse_balance(text)
+                            except ValueError:
+                                self._notify("background_read", combo.id, f"未取得有效數字：{text}")
+                                continue
+                        previous, confirmations = pending.get(combo.id, (None, 0))
+                        confirmations = confirmations + 1 if previous == value else 1
+                        pending[combo.id] = (value, confirmations)
+                        required = (2 if confidence >= combo.text_threshold
+                                    else combo.low_confidence_confirmations)
+                        if confirmations < required:
+                            self._notify("background_read", combo.id,
+                                         f"讀到 {value}，等待再次確認 {confirmations}/{required}")
                             continue
                         row = self.accept(profile, combo, value, text, confidence, now)
                         if row:
