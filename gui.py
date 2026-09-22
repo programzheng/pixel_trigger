@@ -1405,8 +1405,11 @@ class ComboEditor:
         ttk.Button(self.frm_calc, text="在螢幕框選數字區域", command=self._select_calc_region).pack(anchor="w")
         self.var_daily_limit = tk.StringVar(value=str(combo.daily_limit))
         self.var_warning_ratio = tk.StringVar(value=str(combo.warning_ratio * 100))
+        self.var_low_confidence_confirmations = tk.StringVar(
+            value=str(combo.low_confidence_confirmations))
         for label, var in (("每日收入上限", self.var_daily_limit), ("預警比例 %", self.var_warning_ratio),
-                           ("OCR 信心度 0~1", self.var_text_threshold)):
+                           ("OCR 信心度 0~1", self.var_text_threshold),
+                           ("低信心確認次數 2~10", self.var_low_confidence_confirmations)):
             row = ttk.Frame(self.frm_calc)
             row.pack(fill="x", pady=3)
             ttk.Label(row, text=label).pack(side="left")
@@ -1442,6 +1445,8 @@ class ComboEditor:
                             calc_region=tuple(int(v.get()) for v in self.calc_region_vars),
                             daily_limit=int(self.var_daily_limit.get()),
                             warning_ratio=float(self.var_warning_ratio.get()) / 100,
+                            low_confidence_confirmations=int(
+                                self.var_low_confidence_confirmations.get()),
                             text_threshold=float(self.var_text_threshold.get()),
                             match_threshold=float(self.var_threshold.get()))
         validate_combo(candidate)
@@ -2022,7 +2027,8 @@ class ComboEditor:
                 if not ScreenCapture().load_template(candidate.image_path):
                     raise ValueError("請設定有效的固定圖示定位圖片。")
                 for name in ("name", "detection_mode", "image_path", "calc_region", "daily_limit",
-                             "warning_ratio", "text_threshold", "match_threshold"):
+                             "warning_ratio", "low_confidence_confirmations",
+                             "text_threshold", "match_threshold"):
                     setattr(self.combo, name, getattr(candidate, name))
                 self.result = True
                 self.win.destroy()

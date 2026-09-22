@@ -146,6 +146,23 @@ class CalcTests(unittest.TestCase):
             engine._loop(profile, [combo])
             self.assertEqual([row["balance"] for row in engine.ledger.rows], ["576"])
 
+    def test_low_confidence_numeric_text_uses_configured_confirmations(self):
+        with tempfile.TemporaryDirectory() as folder:
+            engine = BackgroundCalc(Mock(), Ledger(folder))
+            profile, combo = Profile(), Combo(
+                text_threshold=.5, low_confidence_confirmations=4)
+            engine.capture.grab_frame = Mock(return_value=np.zeros((10, 10)))
+            engine.capture.read_balance = Mock(return_value=(None, "611", .3, None))
+            calls = 0
+            def wait(_seconds):
+                nonlocal calls
+                calls += 1
+                if calls == 4:
+                    engine.stop_event.set()
+            engine.stop_event.wait = wait
+            engine._loop(profile, [combo])
+            self.assertEqual([row["balance"] for row in engine.ledger.rows], ["611"])
+
     def test_ocr_region_scaling_and_invalid_results(self):
         combo = Combo(image_path="icon", calc_region=(12, -2, 10, 6))
         capture = ScreenCapture()
