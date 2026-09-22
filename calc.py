@@ -110,6 +110,53 @@ class Ledger:
         expense = sum(max(0, -int(r["delta"])) for r in rows)
         return income, expense, income - expense, rows
 
+    def edit_balance(self, index, balance):
+        if type(balance) is not int or balance < 0:
+            raise ValueError("身上金額必須是非負整數。")
+        with self.lock:
+            if not 0 <= index < len(self.rows):
+                raise ValueError("找不到要編輯的紀錄。")
+            rows = deepcopy(self.rows)
+            old_balance = int(rows[index]["balance"])
+            rows[index]["balance"] = str(balance)
+            rows[index]["ocr_text"] = f"manual:{balance}"
+            rows[index]["ocr_confidence"] = "1.0"
+            last = {}
+            for row in rows:
+                key = (row["profile_id"], row["combo_id"])
+                previous = last.get(key)
+                if row["record_type"] == "change":
+                    if previous is None:
+                        raise ValueError("紀錄缺少建立基準。")
+                    row["previous_balance"] = str(previous)
+                    row["delta"] = str(int(row["balance"]) - previous)
+                else:
+                    row["previous_balance"] = str(previous) if previous is not None else ""
+                    row["delta"] = "0"
+                last[key] = int(row["balance"])
+
+            by_date = {}
+            for row in rows:
+                by_date.setdefault(row["timestamp"][:8], []).append(row)
+            self.directory.mkdir(parents=True, exist_ok=True)
+            pending = []
+            try:
+                for date, dated_rows in by_date.items():
+                    path = self.directory / f"{date}.csv"
+                    temp = path.with_name(f".{path.name}.tmp")
+                    with temp.open("w", encoding="utf-8-sig", newline="") as stream:
+                        writer = csv.DictWriter(stream, fieldnames=FIELDS)
+                        writer.writeheader()
+                        writer.writerows(dated_rows)
+                    pending.append((temp, path))
+                for temp, path in pending:
+                    temp.replace(path)
+            finally:
+                for temp, _path in pending:
+                    temp.unlink(missing_ok=True)
+            self.rows, self.last = rows, last
+            return old_balance
+
 
 class BackgroundCalc:
     def __init__(self, notify, ledger=None):

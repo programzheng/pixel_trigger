@@ -425,6 +425,7 @@ class App:
         ttk.OptionMenu(row, self._calc_period, "Daily", "Daily", "Month", "Years").pack(side="left")
         self._calc_reset = ttk.Button(row, text="重設基準", command=self._reset_calc)
         self._calc_reset.pack(side="left", padx=5)
+        ttk.Button(row, text="編輯選取紀錄", command=self._edit_calc_record).pack(side="left")
         self._calc_summary = ttk.Label(win, justify="left", anchor="w")
         self._calc_summary.pack(fill="x", padx=10, pady=5)
         columns = ("timestamp", "record_type", "balance", "delta")
@@ -434,6 +435,7 @@ class App:
             self._calc_tree.column(column, width=160)
         scrollbar = ttk.Scrollbar(win, command=self._calc_tree.yview)
         self._calc_tree.configure(yscrollcommand=scrollbar.set)
+        self._calc_tree.bind("<Double-1>", lambda _event: self._edit_calc_record())
         scrollbar.pack(side="right", fill="y")
         self._calc_tree.pack(fill="both", expand=True, padx=10, pady=5)
         self._calc_view_key = None
@@ -463,7 +465,11 @@ class App:
         ledger = self.background.ledger
         period = self._calc_period.get()
         prefix = date[:{"Daily": 8, "Month": 6, "Years": 4}[period]]
-        records = ledger.snapshot(self.profile.id, combo.id, prefix)[3]
+        with ledger.lock:
+            records = [(index, dict(record)) for index, record in enumerate(ledger.rows)
+                       if record["profile_id"] == self.profile.id
+                       and record["combo_id"] == combo.id
+                       and record["timestamp"].startswith(prefix)]
         daily = ledger.snapshot(self.profile.id, combo.id, date[:8])[:3]
         monthly = ledger.snapshot(self.profile.id, combo.id, date[:6])[:3]
         yearly = ledger.snapshot(self.profile.id, combo.id, date[:4])[:3]
@@ -476,16 +482,36 @@ class App:
             f"今日正收入：{today}/{combo.daily_limit}（{today / combo.daily_limit:.1%}）　"
             f"{'剩餘 ' + str(combo.daily_limit - today) if today <= combo.daily_limit else '超額 ' + str(today - combo.daily_limit)}　{state}\n"
             f"CSV：{ledger.directory}"))
-        key = (combo.id, prefix, len(records))
+        key = (combo.id, prefix, tuple((index, record["balance"], record["delta"])
+                                      for index, record in records))
         if key != self._calc_view_key:
             self._calc_tree.delete(*self._calc_tree.get_children())
-            for record in records:
-                self._calc_tree.insert("", "end", values=(
+            for index, record in records:
+                self._calc_tree.insert("", "end", iid=str(index), values=(
                     record["timestamp"],
                     {"baseline": "建立基準", "change": "金額變動", "reset": "重設基準"}[record["record_type"]],
                     record["balance"], record["delta"],
                 ))
             self._calc_view_key = key
+
+    def _edit_calc_record(self):
+        selected = self._calc_tree.selection()
+        if not selected:
+            messagebox.showinfo("提示", "請先選取一筆計算紀錄。", parent=self._calc_window)
+            return
+        current = int(self._calc_tree.set(selected[0], "balance"))
+        balance = simpledialog.askinteger(
+            "編輯身上金額", "輸入正確的身上金額：", initialvalue=current,
+            minvalue=0, parent=self._calc_window)
+        if balance is None or balance == current:
+            return
+        try:
+            self.background.ledger.edit_balance(int(selected[0]), balance)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("編輯失敗", str(error), parent=self._calc_window)
+            return
+        self._calc_view_key = None
+        self._update_calc_view()
 
     def _reset_calc(self):
         index = self._calc_choice.current()
