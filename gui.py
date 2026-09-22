@@ -426,6 +426,7 @@ class App:
         self._calc_reset = ttk.Button(row, text="重設基準", command=self._reset_calc)
         self._calc_reset.pack(side="left", padx=5)
         ttk.Button(row, text="編輯選取紀錄", command=self._edit_calc_record).pack(side="left")
+        ttk.Button(row, text="刪除選取紀錄", command=self._delete_calc_record).pack(side="left", padx=5)
         self._calc_summary = ttk.Label(win, justify="left", anchor="w")
         self._calc_summary.pack(fill="x", padx=10, pady=5)
         columns = ("timestamp", "record_type", "balance", "delta")
@@ -509,6 +510,24 @@ class App:
             self.background.ledger.edit_balance(int(selected[0]), balance)
         except (OSError, ValueError) as error:
             messagebox.showerror("編輯失敗", str(error), parent=self._calc_window)
+            return
+        self._calc_view_key = None
+        self._update_calc_view()
+
+    def _delete_calc_record(self):
+        selected = self._calc_tree.selection()
+        if not selected:
+            messagebox.showinfo("提示", "請先選取一筆計算紀錄。", parent=self._calc_window)
+            return
+        values = self._calc_tree.item(selected[0], "values")
+        if not messagebox.askyesno(
+                "刪除計算紀錄", f"確定刪除 {values[0]}、身上金額 {values[2]} 的紀錄？\n後續變動將重新計算。",
+                parent=self._calc_window):
+            return
+        try:
+            self.background.ledger.delete_record(int(selected[0]))
+        except (OSError, ValueError) as error:
+            messagebox.showerror("刪除失敗", str(error), parent=self._calc_window)
             return
         self._calc_view_key = None
         self._update_calc_view()
