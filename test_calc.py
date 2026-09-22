@@ -71,6 +71,24 @@ class CalcTests(unittest.TestCase):
                               for row in reloaded.rows], [("", "0"), ("100", "30"), ("130", "-10")])
             self.assertEqual(reloaded.last[(profile.id, combo.id)], 120)
 
+    def test_delete_record_recalculates_following_delta_and_baseline(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ledger = Ledger(folder)
+            profile, combo = Profile(), Combo()
+            now = datetime(2026, 9, 18, 9)
+            for balance in (100, 150, 120):
+                ledger.record(profile, combo, balance, str(balance), .9, now)
+            ledger.delete_record(1)
+            self.assertEqual([(row["balance"], row["delta"])
+                              for row in ledger.rows], [("100", "0"), ("120", "20")])
+            ledger.delete_record(0)
+            self.assertEqual((ledger.rows[0]["record_type"], ledger.rows[0]["delta"]),
+                             ("baseline", "0"))
+            reloaded = Ledger(folder)
+            reloaded.load()
+            self.assertEqual([(row["balance"], row["record_type"], row["delta"])
+                              for row in reloaded.rows], [("120", "baseline", "0")])
+
     def test_write_failure_keeps_last_balance(self):
         with tempfile.TemporaryDirectory() as folder:
             ledger = Ledger(folder)
@@ -108,6 +126,25 @@ class CalcTests(unittest.TestCase):
             warnings = [e[2] for e in events if e[0] == "background_record" and "上限" in e[2]]
             self.assertEqual(len(warnings), 2)
             self.assertEqual(engine.ledger.snapshot(profile.id, combo.id, "")[:3], (1076, 0, 1076))
+
+    def test_background_confirmation_survives_failed_ocr_between_matching_reads(self):
+        with tempfile.TemporaryDirectory() as folder:
+            engine = BackgroundCalc(Mock(), Ledger(folder))
+            profile, combo = Profile(), Combo()
+            readings = iter([(576, "576", .88, None),
+                             (None, "OCR 無有效數字", 0, None),
+                             (576, "576", .88, None)])
+            engine.capture.grab_frame = Mock(return_value=np.zeros((10, 10)))
+            engine.capture.read_balance = Mock(side_effect=lambda *_args: next(readings))
+            calls = 0
+            def wait(_seconds):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    engine.stop_event.set()
+            engine.stop_event.wait = wait
+            engine._loop(profile, [combo])
+            self.assertEqual([row["balance"] for row in engine.ledger.rows], ["576"])
 
     def test_ocr_region_scaling_and_invalid_results(self):
         combo = Combo(image_path="icon", calc_region=(12, -2, 10, 6))

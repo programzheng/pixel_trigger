@@ -121,41 +121,56 @@ class Ledger:
             rows[index]["balance"] = str(balance)
             rows[index]["ocr_text"] = f"manual:{balance}"
             rows[index]["ocr_confidence"] = "1.0"
-            last = {}
-            for row in rows:
-                key = (row["profile_id"], row["combo_id"])
-                previous = last.get(key)
-                if row["record_type"] == "change":
-                    if previous is None:
-                        raise ValueError("紀錄缺少建立基準。")
-                    row["previous_balance"] = str(previous)
-                    row["delta"] = str(int(row["balance"]) - previous)
-                else:
-                    row["previous_balance"] = str(previous) if previous is not None else ""
-                    row["delta"] = "0"
-                last[key] = int(row["balance"])
-
-            by_date = {}
-            for row in rows:
-                by_date.setdefault(row["timestamp"][:8], []).append(row)
-            self.directory.mkdir(parents=True, exist_ok=True)
-            pending = []
-            try:
-                for date, dated_rows in by_date.items():
-                    path = self.directory / f"{date}.csv"
-                    temp = path.with_name(f".{path.name}.tmp")
-                    with temp.open("w", encoding="utf-8-sig", newline="") as stream:
-                        writer = csv.DictWriter(stream, fieldnames=FIELDS)
-                        writer.writeheader()
-                        writer.writerows(dated_rows)
-                    pending.append((temp, path))
-                for temp, path in pending:
-                    temp.replace(path)
-            finally:
-                for temp, _path in pending:
-                    temp.unlink(missing_ok=True)
-            self.rows, self.last = rows, last
+            self._replace_rows(rows)
             return old_balance
+
+    def delete_record(self, index):
+        with self.lock:
+            if not 0 <= index < len(self.rows):
+                raise ValueError("找不到要刪除的紀錄。")
+            rows = deepcopy(self.rows)
+            deleted = rows.pop(index)
+            self._replace_rows(rows)
+            return deleted
+
+    def _replace_rows(self, rows):
+        last = {}
+        for row in rows:
+            key = (row["profile_id"], row["combo_id"])
+            previous = last.get(key)
+            if previous is None and row["record_type"] == "change":
+                row["record_type"] = "baseline"
+            if row["record_type"] == "change":
+                row["previous_balance"] = str(previous)
+                row["delta"] = str(int(row["balance"]) - previous)
+            else:
+                row["previous_balance"] = str(previous) if previous is not None else ""
+                row["delta"] = "0"
+            last[key] = int(row["balance"])
+
+        by_date = {}
+        for row in rows:
+            by_date.setdefault(row["timestamp"][:8], []).append(row)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        pending = []
+        try:
+            for date, dated_rows in by_date.items():
+                path = self.directory / f"{date}.csv"
+                temp = path.with_name(f".{path.name}.tmp")
+                with temp.open("w", encoding="utf-8-sig", newline="") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=FIELDS)
+                    writer.writeheader()
+                    writer.writerows(dated_rows)
+                pending.append((temp, path))
+            for temp, path in pending:
+                temp.replace(path)
+            for path in self.directory.glob("*.csv"):
+                if path.stem not in by_date:
+                    path.unlink()
+        finally:
+            for temp, _path in pending:
+                temp.unlink(missing_ok=True)
+        self.rows, self.last = rows, last
 
 
 class BackgroundCalc:
@@ -254,11 +269,11 @@ class BackgroundCalc:
                         self._notify("background_debug", combo.id, found, score, icon_rect,
                                      value is not None, confidence, number_rect)
                         if value is None:
-                            pending.pop(combo.id, None)
                             self._notify("background_read", combo.id, f"未取得有效數字：{text}")
                             continue
                         if pending.get(combo.id) != value:
                             pending[combo.id] = value
+                            self._notify("background_read", combo.id, f"讀到 {value}，等待再次確認")
                             continue
                         row = self.accept(profile, combo, value, text, confidence, now)
                         if row:
