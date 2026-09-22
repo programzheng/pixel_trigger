@@ -55,6 +55,22 @@ class CalcTests(unittest.TestCase):
                 self.assertEqual(reader.fieldnames, FIELDS)
                 self.assertEqual(next(reader)["timestamp"], "20260919000102")
 
+    def test_edit_balance_recalculates_following_deltas_and_csv(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ledger = Ledger(folder)
+            profile, combo = Profile(), Combo()
+            now = datetime(2026, 9, 18, 9)
+            for balance in (100, 150, 120):
+                ledger.record(profile, combo, balance, str(balance), .9, now)
+            ledger.edit_balance(1, 130)
+            self.assertEqual([int(row["delta"]) for row in ledger.rows], [0, 30, -10])
+            self.assertEqual(ledger.snapshot(profile.id, combo.id, "")[:3], (30, 10, 20))
+            reloaded = Ledger(folder)
+            reloaded.load()
+            self.assertEqual([(row["previous_balance"], row["delta"])
+                              for row in reloaded.rows], [("", "0"), ("100", "30"), ("130", "-10")])
+            self.assertEqual(reloaded.last[(profile.id, combo.id)], 120)
+
     def test_write_failure_keeps_last_balance(self):
         with tempfile.TemporaryDirectory() as folder:
             ledger = Ledger(folder)
