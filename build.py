@@ -54,8 +54,6 @@ PYINSTALLER_ARGS = [
     "--collect-all=easyocr",
     "--collect-all=ttkbootstrap",
     f"--add-data={PROJECT_DIR / 'models'}:models",
-    f"--add-data={PROJECT_DIR / 'profiles'}:profiles",
-    f"--add-data={PROJECT_DIR / 'templates'}:templates",
     "main.py",
 ]
 

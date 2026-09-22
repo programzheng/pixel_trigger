@@ -47,8 +47,9 @@ class BuildModeTest(unittest.TestCase):
         self.assertEqual(command[1:3], ["-m", "PyInstaller"])
         for option in ("--onedir", "--contents-directory=.", "--collect-all=easyocr", "--collect-all=ttkbootstrap"):
             self.assertIn(option, command)
-        for directory in ("models", "profiles", "templates"):
-            self.assertIn(f"--add-data={script.resolve().parent / directory}:{directory}", command)
+        self.assertIn(f"--add-data={script.resolve().parent / 'models'}:models", command)
+        for directory in ("profiles", "templates"):
+            self.assertNotIn(f"--add-data={script.resolve().parent / directory}:{directory}", command)
         self.assertIn("dist/pyinstaller/pixel_trigger/pixel_trigger.exe", output.getvalue())
 
 
