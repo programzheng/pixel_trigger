@@ -129,22 +129,27 @@ class CalcTests(unittest.TestCase):
         engine._process_combo(Combo(detection_mode="background"), None, None)
         engine._capture.match_template.assert_not_called()
 
-    def test_hotkeys_release_and_profile_rebinding(self):
+    def test_hotkeys_press_and_profile_rebinding(self):
         with patch.object(App, "_load_initial_profile"):
             app = App()
-        try:
-            app.root.withdraw()
-            with patch("gui.keyboard.add_hotkey", side_effect=[1, 2, 3, 4]) as add, patch("gui.keyboard.remove_hotkey") as remove:
+        with patch("gui.keyboard.add_hotkey", side_effect=[1, 2, 3, 4]) as add, \
+                patch("gui.keyboard.remove_hotkey") as remove:
+            try:
+                app.root.withdraw()
                 app._register_hotkeys()
-                self.assertTrue(all(call.kwargs["trigger_on_release"] for call in add.call_args_list))
+                self.assertEqual([call.args[0] for call in add.call_args_list], ["F6", "F7"])
+                self.assertTrue(all(not call.kwargs.get("trigger_on_release", False)
+                                    for call in add.call_args_list))
                 add.call_args_list[1].args[1]()
                 self.assertEqual(app._msg_queue.pop(), ("background_hotkey",))
                 app.profile = Profile(hotkey="F8", background_hotkey="F9")
                 app._refresh_hotkeys()
+                self.assertEqual([call.args[0] for call in add.call_args_list], ["F6", "F7", "F8", "F9"])
                 self.assertEqual([call.args[0] for call in remove.call_args_list], [1, 2])
-                app._unregister_hotkeys()
-        finally:
-            app.on_close()
+            finally:
+                app.on_close()
+            self.assertEqual([call.args[0] for call in remove.call_args_list], [1, 2, 3, 4])
+            self.assertEqual(app._hotkeys, [])
 
     def test_ui_profile_roundtrip_and_separate_controls(self):
         with patch.object(App, "_load_initial_profile"):
