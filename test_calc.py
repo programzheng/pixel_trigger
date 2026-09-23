@@ -42,11 +42,11 @@ class CalcTests(unittest.TestCase):
             restarted.load()
             next_day = datetime(2026, 9, 19, 0, 1, 2)
             restarted.record(profile, combo, 650, "650", .99, next_day)
-            self.assertEqual(restarted.snapshot(profile.id, combo.id, "20260919")[:3], (50, 0, 50))
-            self.assertEqual(restarted.snapshot(profile.id, combo.id, "2026")[:3], (366, 40, 326))
+            self.assertEqual(restarted.snapshot(profile.id, combo.id, "20260919")[:3], (0, 0, 0))
+            self.assertEqual(restarted.snapshot(profile.id, combo.id, "2026")[:3], (316, 40, 276))
             restarted.record(profile, combo, 10, "10", .99, next_day, reset=True)
             restarted.record(profile, combo, 20, "20", .99, next_day)
-            self.assertEqual(restarted.snapshot(profile.id, combo.id, "20260919")[:3], (60, 0, 60))
+            self.assertEqual(restarted.snapshot(profile.id, combo.id, "20260919")[:3], (10, 0, 10))
             restarted.load()
             self.assertEqual(restarted.last[(profile.id, combo.id)], 20)
             self.assertEqual(sorted(p.name for p in Path(folder).glob("*.csv")), ["20260918.csv", "20260919.csv"])
@@ -54,6 +54,31 @@ class CalcTests(unittest.TestCase):
                 reader = csv.DictReader(stream)
                 self.assertEqual(reader.fieldnames, FIELDS)
                 self.assertEqual(next(reader)["timestamp"], "20260919000102")
+
+    def test_load_migrates_cross_day_change_to_daily_baseline(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profile, combo = Profile(), Combo()
+            rows = [dict(zip(FIELDS, values)) for values in (
+                ("20260922235959", profile.id, profile.name, combo.id, combo.name,
+                 "baseline", "440", "", "0", "440", ".9"),
+                ("20260923083455", profile.id, profile.name, combo.id, combo.name,
+                 "change", "614", "440", "174", "614", ".9"),
+            )]
+            for date in ("20260922", "20260923"):
+                with (Path(folder) / f"{date}.csv").open(
+                        "w", encoding="utf-8-sig", newline="") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=FIELDS)
+                    writer.writeheader()
+                    writer.writerow(next(row for row in rows if row["timestamp"].startswith(date)))
+            ledger = Ledger(folder)
+            ledger.load()
+            self.assertEqual((ledger.rows[1]["record_type"], ledger.rows[1]["delta"]),
+                             ("baseline", "0"))
+            self.assertEqual(ledger.snapshot(profile.id, combo.id, "20260923")[:3],
+                             (0, 0, 0))
+            reloaded = Ledger(folder)
+            reloaded.load()
+            self.assertEqual(reloaded.rows[1]["previous_balance"], "")
 
     def test_edit_balance_recalculates_following_deltas_and_csv(self):
         with tempfile.TemporaryDirectory() as folder:

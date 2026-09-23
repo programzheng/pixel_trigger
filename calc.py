@@ -46,10 +46,11 @@ class Ledger:
         self.lock = threading.RLock()
         self.rows = []
         self.last = {}
+        self.daily_last = {}
 
     def load(self):
         with self.lock:
-            rows, last = [], {}
+            rows, last, daily_last, migrate = [], {}, {}, False
             for path in sorted(self.directory.glob("*.csv")):
                 with path.open(encoding="utf-8-sig", newline="") as stream:
                     reader = csv.DictReader(stream)
@@ -65,24 +66,34 @@ class Ledger:
                             delta = int(row["delta"])
                             confidence = float(row["ocr_confidence"])
                             key = (row["profile_id"], row["combo_id"])
+                            daily_key = (*key, row["timestamp"][:8])
+                            daily_previous = daily_last.get(daily_key)
                             if (None in row or any(v is None for v in row.values())
                                     or not all(key) or not 0 <= confidence <= 1
                                     or row["record_type"] not in ("baseline", "change", "reset")
                                     or (row["record_type"] != "change" and delta != 0)
                                     or (row["record_type"] == "change" and
-                                        (previous != last.get(key) or delta != balance - previous))):
+                                        daily_previous is not None and
+                                        (previous != daily_previous or delta != balance - previous))):
                                 raise ValueError()
+                            if row["record_type"] == "change" and daily_previous is None:
+                                migrate = True
                         except (ValueError, TypeError, KeyError):
                             raise ValueError(f"CSV 紀錄毀損：{path.name} 第 {reader.line_num} 行") from None
                         rows.append(row)
                         last[key] = balance
-            self.rows, self.last = rows, last
+                        daily_last[daily_key] = balance
+            if migrate:
+                self._replace_rows(rows)
+            else:
+                self.rows, self.last, self.daily_last = rows, last, daily_last
 
     def record(self, profile, combo, balance, text, confidence, now=None, reset=False):
         now = now or datetime.now()
         key = (profile.id, combo.id)
+        daily_key = (*key, now.strftime("%Y%m%d"))
         with self.lock:
-            previous = self.last.get(key)
+            previous = self.daily_last.get(daily_key)
             if previous == balance and not reset:
                 return None
             kind = "reset" if reset else "baseline" if previous is None else "change"
@@ -102,6 +113,7 @@ class Ledger:
                 stream.flush()
             self.rows.append(row)
             self.last[key] = balance
+            self.daily_last[daily_key] = balance
             return row
 
     def snapshot(self, profile_id, combo_id, prefix):
@@ -137,10 +149,11 @@ class Ledger:
             return deleted
 
     def _replace_rows(self, rows):
-        last = {}
+        last, daily_last = {}, {}
         for row in rows:
             key = (row["profile_id"], row["combo_id"])
-            previous = last.get(key)
+            daily_key = (*key, row["timestamp"][:8])
+            previous = daily_last.get(daily_key)
             if previous is None and row["record_type"] == "change":
                 row["record_type"] = "baseline"
             if row["record_type"] == "change":
@@ -150,6 +163,7 @@ class Ledger:
                 row["previous_balance"] = str(previous) if previous is not None else ""
                 row["delta"] = "0"
             last[key] = int(row["balance"])
+            daily_last[daily_key] = int(row["balance"])
 
         by_date = {}
         for row in rows:
@@ -173,7 +187,7 @@ class Ledger:
         finally:
             for temp, _path in pending:
                 temp.unlink(missing_ok=True)
-        self.rows, self.last = rows, last
+        self.rows, self.last, self.daily_last = rows, last, daily_last
 
 
 class BackgroundCalc:
