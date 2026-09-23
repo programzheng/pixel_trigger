@@ -27,7 +27,7 @@ from window_target import capture_region, list_windows
 from automation import HookEngine
 from calc import BackgroundCalc, validate_combo
 from screen_capture import ScreenCapture
-from screen_capture import find_color_marker, color_band_state, ocr_read_image, ocr_from_screen
+from screen_capture import find_color_marker, color_band_state, ocr_from_screen
 from models import (
     Action,
     ActionType,
@@ -1572,8 +1572,8 @@ class ComboEditor:
         except Exception:
             pass
 
-    def _update_preview(self, path: str, auto_ocr: bool = False):
-        """載入圖片並顯示縮圖預覽。auto_ocr=True 時自動 OCR 帶入驗證文字。"""
+    def _update_preview(self, path: str):
+        """載入圖片並顯示縮圖預覽。"""
         try:
             img = Image.open(path)
         except Exception:
@@ -1597,17 +1597,6 @@ class ComboEditor:
             self.lbl_thumb.pack(before=self.frm_calc, anchor="w", padx=10, pady=2)
         if hasattr(self, "frm_position"):
             self._preview_position()
-
-        # 更換圖片時自動 OCR 讀取文字帶入
-        if (auto_ocr and self.var_detection_mode.get() == "active"
-                and hasattr(self, "var_verify_text")):
-            self.lbl_preview.config(text=f"{Path(path).name} ({w}x{h}) OCR 讀取中...")
-            self.win.update_idletasks()
-            text = ocr_read_image(path)
-            self.var_verify_text.set(text)
-            self.lbl_preview.config(
-                text=f"{Path(path).name} ({w}x{h})", bootstyle="default",
-            )
 
     def _update_target_preview(self, path: str):
         try:
@@ -1684,7 +1673,7 @@ class ComboEditor:
                 self._update_target_preview(path)
             else:
                 self.var_image.set(path)
-                self._update_preview(path, auto_ocr=True)
+                self._update_preview(path)
 
     def _paste_image(self):
         """從剪貼簿貼上圖片，自動存到 templates/ 目錄"""
@@ -1711,7 +1700,7 @@ class ComboEditor:
             return
 
         self.var_image.set(str(save_path))
-        self._update_preview(str(save_path), auto_ocr=True)
+        self._update_preview(str(save_path))
 
     def _remove_bg(self):
         """開啟色彩去背對話框"""
@@ -1721,7 +1710,7 @@ class ComboEditor:
         dlg = RemoveBgDialog(self.win, image_path)
         if dlg.result_path:
             self.var_image.set(dlg.result_path)
-            self._update_preview(dlg.result_path, auto_ocr=True)
+            self._update_preview(dlg.result_path)
 
     def _build_position_ui(self, parent):
         settings = self.combo.position_control

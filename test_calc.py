@@ -301,7 +301,7 @@ class CalcTests(unittest.TestCase):
         finally:
             app.on_close()
 
-    def test_background_image_does_not_run_hidden_verification_ocr(self):
+    def test_image_selection_does_not_run_verification_ocr(self):
         root = tk.Tk()
         root.withdraw()
         try:
@@ -311,8 +311,15 @@ class CalcTests(unittest.TestCase):
                 Image.new("RGB", (16, 24), "yellow").save(path)
                 with patch.object(tk.Toplevel, "wait_window"):
                     editor = ComboEditor(root, Combo(detection_mode="background"))
-                with patch("gui.ocr_read_image") as ocr:
-                    editor._update_preview(str(path), auto_ocr=True)
+                with patch("screen_capture.ocr_read_image") as ocr, \
+                        patch("gui.filedialog.askopenfilename", return_value=str(path)):
+                    for mode in ("background", "active"):
+                        editor.var_detection_mode.set(mode)
+                        editor.var_verify_text.set("既有驗證文字")
+                        editor._browse_image()
+                        self.assertEqual(editor.var_image.get(), str(path))
+                        self.assertEqual(editor.var_verify_text.get(), "既有驗證文字")
+                        self.assertIn("icon.png (16x24)", editor.lbl_preview.cget("text"))
                     ocr.assert_not_called()
                 self.assertEqual(editor.lbl_image.cget("text"), "定位圖片:")
                 self.assertEqual(editor.frm_params.winfo_manager(), "")
