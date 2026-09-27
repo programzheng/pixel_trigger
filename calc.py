@@ -4,7 +4,7 @@ import csv
 import re
 import threading
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from profile_manager import PROFILES_DIR
@@ -12,9 +12,15 @@ from screen_capture import ScreenCapture
 from window_target import capture_region, get_window_region
 
 
-FIELDS = ["timestamp", "profile_id", "profile_name", "combo_id", "combo_name",
+LEGACY_FIELDS = ["timestamp", "profile_id", "profile_name", "combo_id", "combo_name",
           "record_type", "balance", "previous_balance", "delta", "ocr_text",
           "ocr_confidence"]
+FIELDS = ["timestamp", "day", *LEGACY_FIELDS[1:]]
+
+
+def accounting_day(now, reset_time):
+    reset = datetime.strptime(reset_time, "%H:%M").time()
+    return (now - timedelta(days=now.time() < reset)).strftime("%Y%m%d")
 
 
 def parse_balance(text):
@@ -31,6 +37,13 @@ def validate_combo(combo):
         raise ValueError("請設定數字區域的 X、Y 偏移及正整數寬高。")
     if type(combo.daily_limit) is not int or combo.daily_limit < 1:
         raise ValueError("每日上限必須是正整數。")
+    try:
+        if (type(combo.daily_reset_time) is not str
+                or datetime.strptime(combo.daily_reset_time, "%H:%M").strftime("%H:%M")
+                != combo.daily_reset_time):
+            raise ValueError()
+    except ValueError:
+        raise ValueError("每日重置時間必須是 HH:MM。") from None
     if not 0 < combo.warning_ratio <= 1 or not 0 <= combo.text_threshold <= 1:
         raise ValueError("預警比例與 OCR 信心度設定不正確。")
     if (type(combo.low_confidence_confirmations) is not int
@@ -48,25 +61,37 @@ class Ledger:
         self.last = {}
         self.daily_last = {}
 
-    def load(self):
+    def load(self, profile=None):
+        reset_times = ({(profile.id, combo.id): combo.daily_reset_time
+                        for combo in profile.combos} if profile else {})
         with self.lock:
             rows, last, daily_last, migrate = [], {}, {}, False
             for path in sorted(self.directory.glob("*.csv")):
                 with path.open(encoding="utf-8-sig", newline="") as stream:
                     reader = csv.DictReader(stream)
-                    if reader.fieldnames != FIELDS:
+                    if reader.fieldnames not in (FIELDS, LEGACY_FIELDS):
                         raise ValueError(f"CSV 欄位毀損：{path.name}")
+                    legacy = reader.fieldnames == LEGACY_FIELDS
                     for row in reader:
                         try:
                             stamp = datetime.strptime(row["timestamp"], "%Y%m%d%H%M%S")
                             if len(row["timestamp"]) != 14 or stamp.strftime("%Y%m%d") != path.stem:
+                                raise ValueError()
+                            if legacy:
+                                reset_time = reset_times.get(
+                                    (row["profile_id"], row["combo_id"]), "00:00")
+                                row["day"] = accounting_day(stamp, reset_time)
+                                migrate = True
+                            day_stamp = datetime.strptime(row["day"], "%Y%m%d")
+                            if (len(row["day"]) != 8
+                                    or day_stamp.strftime("%Y%m%d") != row["day"]):
                                 raise ValueError()
                             balance = parse_balance(row["balance"])
                             previous = parse_balance(row["previous_balance"]) if row["previous_balance"] else None
                             delta = int(row["delta"])
                             confidence = float(row["ocr_confidence"])
                             key = (row["profile_id"], row["combo_id"])
-                            daily_key = (*key, row["timestamp"][:8])
+                            daily_key = (*key, row["day"])
                             daily_previous = daily_last.get(daily_key)
                             if (None in row or any(v is None for v in row.values())
                                     or not all(key) or not 0 <= confidence <= 1
@@ -91,14 +116,15 @@ class Ledger:
     def record(self, profile, combo, balance, text, confidence, now=None, reset=False):
         now = now or datetime.now()
         key = (profile.id, combo.id)
-        daily_key = (*key, now.strftime("%Y%m%d"))
+        day = accounting_day(now, combo.daily_reset_time)
+        daily_key = (*key, day)
         with self.lock:
             previous = self.daily_last.get(daily_key)
             if previous == balance and not reset:
                 return None
             kind = "reset" if reset else "baseline" if previous is None else "change"
             delta = balance - previous if kind == "change" else 0
-            row = dict(zip(FIELDS, [now.strftime("%Y%m%d%H%M%S"), profile.id,
+            row = dict(zip(FIELDS, [now.strftime("%Y%m%d%H%M%S"), day, profile.id,
                        profile.name, combo.id, combo.name, kind, str(balance),
                        str(previous) if previous is not None else "", str(delta), text,
                        str(confidence)]))
@@ -120,7 +146,7 @@ class Ledger:
         # ponytail: in-memory CSV scan; use SQLite if retained history makes this slow.
         with self.lock:
             rows = [dict(r) for r in self.rows if r["profile_id"] == profile_id
-                    and r["combo_id"] == combo_id and r["timestamp"].startswith(prefix)]
+                    and r["combo_id"] == combo_id and r["day"].startswith(prefix)]
         income = sum(max(0, int(r["delta"])) for r in rows)
         expense = sum(max(0, -int(r["delta"])) for r in rows)
         return income, expense, income - expense, rows
@@ -139,6 +165,20 @@ class Ledger:
             self._replace_rows(rows)
             return old_balance
 
+    def add_record(self, profile, combo, timestamp, balance):
+        if type(timestamp) is not datetime or type(balance) is not int or balance < 0:
+            raise ValueError("時間或身上金額格式不正確。")
+        row = dict(zip(FIELDS, [timestamp.strftime("%Y%m%d%H%M%S"),
+                   accounting_day(timestamp, combo.daily_reset_time), profile.id,
+                   profile.name, combo.id, combo.name, "change", str(balance), "", "0",
+                   f"manual:{balance}", "1.0"]))
+        with self.lock:
+            rows = deepcopy(self.rows)
+            rows.append(row)
+            rows.sort(key=lambda item: item["timestamp"])
+            self._replace_rows(rows)
+        return row
+
     def delete_record(self, index):
         with self.lock:
             if not 0 <= index < len(self.rows):
@@ -152,10 +192,12 @@ class Ledger:
         last, daily_last = {}, {}
         for row in rows:
             key = (row["profile_id"], row["combo_id"])
-            daily_key = (*key, row["timestamp"][:8])
+            daily_key = (*key, row["day"])
             previous = daily_last.get(daily_key)
             if previous is None and row["record_type"] == "change":
                 row["record_type"] = "baseline"
+            elif previous is not None and row["record_type"] == "baseline":
+                row["record_type"] = "change"
             if row["record_type"] == "change":
                 row["previous_balance"] = str(previous)
                 row["delta"] = str(int(row["balance"]) - previous)
@@ -222,7 +264,7 @@ class BackgroundCalc:
             if not self.capture.load_template(combo.image_path):
                 raise ValueError(f"{combo.name}：請設定不含數字的定位圖片。")
         capture_region(profile)
-        self.ledger.load()
+        self.ledger.load(profile)
         # Freeze identity/settings so a cancelled OCR cannot follow later UI edits.
         profile = deepcopy(profile)
         combos = [c for c in profile.combos if c.enabled and c.detection_mode == "background"]
@@ -265,7 +307,7 @@ class BackgroundCalc:
                     self._notify("background_status", "目標視窗不可用，背景暫停讀取")
                     self.stop_event.wait(1)
                     continue
-                frame = self.capture.grab_frame(region)
+                frame = self.capture.grab_frame(region, color=True)
                 captured_at = datetime.now()
                 if frame is None:
                     pending.clear()
@@ -303,12 +345,13 @@ class BackgroundCalc:
                         row = self.accept(profile, combo, value, text, confidence, now)
                         if row:
                             self._notify("background_record", combo.id, f"餘額 {value}，變動 {int(row['delta']):+d}")
-                        income = self.ledger.snapshot(profile.id, combo.id, now.strftime("%Y%m%d"))[0]
+                        day = accounting_day(now, combo.daily_reset_time)
+                        income = self.ledger.snapshot(profile.id, combo.id, day)[0]
                         level = "已達上限" if income >= combo.daily_limit else "接近上限" if income >= combo.daily_limit * combo.warning_ratio else None
                         self._notify("background_read", combo.id,
                                     f"餘額 {value}；今日收入 {income}/{combo.daily_limit}"
                                     + (f"；{level}" if level else ""))
-                        key = (combo.id, now.strftime("%Y%m%d"), level)
+                        key = (combo.id, day, level)
                         if level and key not in warned:
                             # Prior saved rows reveal whether this threshold was already crossed.
                             prior = income - max(0, int(row["delta"])) if row else income

@@ -11,7 +11,7 @@ import warnings
 import threading
 import keyboard
 import tkinter as tk
-from datetime import datetime
+from datetime import datetime, timedelta
 
 warnings.filterwarnings("ignore", message=".*pin_memory.*")
 from tkinter import filedialog, messagebox, simpledialog
@@ -25,7 +25,7 @@ from PIL import Image, ImageGrab, ImageTk
 import profile_manager
 from window_target import capture_region, list_windows
 from automation import HookEngine
-from calc import BackgroundCalc, validate_combo
+from calc import BackgroundCalc, accounting_day, validate_combo
 from screen_capture import ScreenCapture
 from screen_capture import find_color_marker, color_band_state, ocr_from_screen
 from models import (
@@ -97,7 +97,7 @@ def _system_theme():
 
 class App:
     def __init__(self):
-        self.root = ttk.Window(themename=_system_theme(), hdpi=False)
+        self.root = ttk.Window(themename=_system_theme())
         self._theme_manual = False
         self.root.title("PixelTrigger")
         self.root.geometry("900x800")
@@ -187,12 +187,12 @@ class App:
         self.tree.heading("action", text="動作")
         self.tree.heading("status", text="偵測結果")
         self.tree.heading("scale", text="匹配比例")
-        self.tree.column("enabled", width=40, anchor="center", stretch=False)
+        self.tree.column("enabled", width=60, anchor="center", stretch=False)
         self.tree.column("name", width=180)
         self.tree.column("trigger", width=140)
         self.tree.column("action", width=150)
         self.tree.column("status", width=220, minwidth=100, anchor="w")
-        self.tree.column("scale", width=80, anchor="center", stretch=False)
+        self.tree.column("scale", width=100, anchor="center", stretch=False)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
 
@@ -404,7 +404,7 @@ class App:
             return
         try:
             if not self.background.busy:
-                self.background.ledger.load()
+                self.background.ledger.load(self.profile)
         except Exception as error:
             messagebox.showerror("CSV 載入失敗", str(error))
             return
@@ -419,12 +419,16 @@ class App:
         if self._calc_combos:
             self._calc_choice.current(0)
         ttk.Label(row, text="日期 YYYYMMDD:").pack(side="left", padx=5)
-        self._calc_date = tk.StringVar(value=datetime.now().strftime("%Y%m%d"))
+        reset_time = self._calc_combos[0].daily_reset_time if self._calc_combos else "00:00"
+        self._calc_date = tk.StringVar(value=accounting_day(datetime.now(), reset_time))
+        self._calc_choice.bind("<<ComboboxSelected>>", lambda _event: self._calc_date.set(
+            accounting_day(datetime.now(), self._calc_combos[self._calc_choice.current()].daily_reset_time)))
         ttk.Entry(row, textvariable=self._calc_date, width=10).pack(side="left")
         self._calc_period = tk.StringVar(value="Daily")
         ttk.OptionMenu(row, self._calc_period, "Daily", "Daily", "Month", "Years").pack(side="left")
         self._calc_reset = ttk.Button(row, text="重設基準", command=self._reset_calc)
         self._calc_reset.pack(side="left", padx=5)
+        ttk.Button(row, text="在選取位置新增", command=self._add_calc_record).pack(side="left")
         ttk.Button(row, text="編輯選取紀錄", command=self._edit_calc_record).pack(side="left")
         ttk.Button(row, text="刪除選取紀錄", command=self._delete_calc_record).pack(side="left", padx=5)
         self._calc_summary = ttk.Label(win, justify="left", anchor="w")
@@ -470,11 +474,12 @@ class App:
             records = [(index, dict(record)) for index, record in enumerate(ledger.rows)
                        if record["profile_id"] == self.profile.id
                        and record["combo_id"] == combo.id
-                       and record["timestamp"].startswith(prefix)]
+                       and record["day"].startswith(prefix)]
         daily = ledger.snapshot(self.profile.id, combo.id, date[:8])[:3]
         monthly = ledger.snapshot(self.profile.id, combo.id, date[:6])[:3]
         yearly = ledger.snapshot(self.profile.id, combo.id, date[:4])[:3]
-        today = ledger.snapshot(self.profile.id, combo.id, datetime.now().strftime("%Y%m%d"))[0]
+        today = ledger.snapshot(
+            self.profile.id, combo.id, accounting_day(datetime.now(), combo.daily_reset_time))[0]
         state = "已達上限" if today >= combo.daily_limit else "接近上限" if today >= combo.daily_limit * combo.warning_ratio else "額度正常"
         self._calc_summary.config(text=(
             f"Daily 收入 {daily[0]}　支出 {daily[1]}　淨利 {daily[2]}\n"
@@ -494,6 +499,58 @@ class App:
                     record["balance"], record["delta"],
                 ))
             self._calc_view_key = key
+
+    def _add_calc_record(self):
+        index = self._calc_choice.current()
+        if not 0 <= index < len(self._calc_combos):
+            return
+        selected = self._calc_tree.selection()
+        if not selected:
+            messagebox.showinfo("提示", "請先選取插入位置的參考紀錄。",
+                                parent=self._calc_window)
+            return
+        before = messagebox.askyesnocancel(
+            "插入位置", "按「是」插入選取紀錄之前；按「否」插入之後。",
+            parent=self._calc_window)
+        if before is None:
+            return
+        items = list(self._calc_tree.get_children())
+        selected_at = items.index(selected[0])
+        neighbor_at = selected_at - 1 if before else selected_at + 1
+        selected_time = datetime.strptime(
+            self._calc_tree.set(selected[0], "timestamp"), "%Y%m%d%H%M%S")
+        if 0 <= neighbor_at < len(items):
+            neighbor_time = datetime.strptime(
+                self._calc_tree.set(items[neighbor_at], "timestamp"), "%Y%m%d%H%M%S")
+            initial_time = selected_time + (neighbor_time - selected_time) / 2
+        else:
+            initial_time = selected_time + timedelta(seconds=-1 if before else 1)
+        timestamp = simpledialog.askstring(
+            "新增計算紀錄", "時間 YYYYMMDDHHMMSS：",
+            initialvalue=initial_time.strftime("%Y%m%d%H%M%S"), parent=self._calc_window)
+        if timestamp is None:
+            return
+        try:
+            when = datetime.strptime(timestamp, "%Y%m%d%H%M%S")
+            if len(timestamp) != 14 or when.strftime("%Y%m%d%H%M%S") != timestamp:
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("新增失敗", "時間必須是 YYYYMMDDHHMMSS。",
+                                 parent=self._calc_window)
+            return
+        balance = simpledialog.askinteger(
+            "新增計算紀錄", "輸入當時的身上金額：", minvalue=0,
+            parent=self._calc_window)
+        if balance is None:
+            return
+        try:
+            self.background.ledger.add_record(
+                self.profile, self._calc_combos[index], when, balance)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("新增失敗", str(error), parent=self._calc_window)
+            return
+        self._calc_view_key = None
+        self._update_calc_view()
 
     def _edit_calc_record(self):
         selected = self._calc_tree.selection()
@@ -1404,10 +1461,13 @@ class ComboEditor:
             ttk.Entry(row, textvariable=var, width=5).pack(side="left")
         ttk.Button(self.frm_calc, text="在螢幕框選數字區域", command=self._select_calc_region).pack(anchor="w")
         self.var_daily_limit = tk.StringVar(value=str(combo.daily_limit))
+        self.var_daily_reset_time = tk.StringVar(value=combo.daily_reset_time)
         self.var_warning_ratio = tk.StringVar(value=str(combo.warning_ratio * 100))
         self.var_low_confidence_confirmations = tk.StringVar(
             value=str(combo.low_confidence_confirmations))
-        for label, var in (("每日收入上限", self.var_daily_limit), ("預警比例 %", self.var_warning_ratio),
+        for label, var in (("每日收入上限", self.var_daily_limit),
+                           ("每日重置時間 HH:MM", self.var_daily_reset_time),
+                           ("預警比例 %", self.var_warning_ratio),
                            ("OCR 信心度 0~1", self.var_text_threshold),
                            ("低信心確認次數 2~10", self.var_low_confidence_confirmations)):
             row = ttk.Frame(self.frm_calc)
@@ -1444,6 +1504,7 @@ class ComboEditor:
                             detection_mode="background", image_path=self.var_image.get().strip(),
                             calc_region=tuple(int(v.get()) for v in self.calc_region_vars),
                             daily_limit=int(self.var_daily_limit.get()),
+                            daily_reset_time=self.var_daily_reset_time.get().strip(),
                             warning_ratio=float(self.var_warning_ratio.get()) / 100,
                             low_confidence_confirmations=int(
                                 self.var_low_confidence_confirmations.get()),
@@ -2016,6 +2077,7 @@ class ComboEditor:
                 if not ScreenCapture().load_template(candidate.image_path):
                     raise ValueError("請設定有效的固定圖示定位圖片。")
                 for name in ("name", "detection_mode", "image_path", "calc_region", "daily_limit",
+                             "daily_reset_time",
                              "warning_ratio", "low_confidence_confirmations",
                              "text_threshold", "match_threshold"):
                     setattr(self.combo, name, getattr(candidate, name))

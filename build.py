@@ -35,6 +35,7 @@ NUITKA_ARGS = [
     "--include-data-dir=templates=templates",
     "--include-data-dir=profiles=profiles",
     "--include-data-dir=models=models",  # easyocr 模型（需先執行 prepare_models.py）
+    "--include-data-dir=assets=assets",
     # Windows 版本資訊（可選）
     "--windows-product-name=PixelTrigger",
     "--windows-file-version=0.2.0.0",
@@ -54,6 +55,7 @@ PYINSTALLER_ARGS = [
     "--collect-all=easyocr",
     "--collect-all=ttkbootstrap",
     f"--add-data={PROJECT_DIR / 'models'}:models",
+    f"--add-data={PROJECT_DIR / 'assets'}:assets",
     "main.py",
 ]
 

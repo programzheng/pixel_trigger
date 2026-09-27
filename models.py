@@ -183,6 +183,7 @@ class Combo:
     detection_mode: str = "active"
     calc_region: tuple[int, int, int, int] | None = None
     daily_limit: int = 999
+    daily_reset_time: str = "00:00"
     warning_ratio: float = 0.9
     low_confidence_confirmations: int = 3
 
@@ -216,7 +217,8 @@ class Combo:
         # 只在有設定時才寫入，保持 JSON 簡潔
         if self.detection_mode == "background":
             d.update(detection_mode=self.detection_mode, calc_region=self.calc_region,
-                     daily_limit=self.daily_limit, warning_ratio=self.warning_ratio,
+                     daily_limit=self.daily_limit, daily_reset_time=self.daily_reset_time,
+                     warning_ratio=self.warning_ratio,
                      text_threshold=self.text_threshold,
                      low_confidence_confirmations=self.low_confidence_confirmations)
         if self.trigger.tracks_marker:
@@ -237,6 +239,7 @@ class Combo:
             detection_mode=d.get("detection_mode", "active"),
             calc_region=tuple(d["calc_region"]) if d.get("calc_region") else None,
             daily_limit=d.get("daily_limit", 999),
+            daily_reset_time=d.get("daily_reset_time", "00:00"),
             warning_ratio=d.get("warning_ratio", 0.9),
             low_confidence_confirmations=d.get("low_confidence_confirmations", 3),
             image_path=d.get("image_path", ""),
