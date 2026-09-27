@@ -8,12 +8,13 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
+import cv2
 
 from automation import HookEngine
-from calc import BackgroundCalc, FIELDS, Ledger, parse_balance
+from calc import BackgroundCalc, FIELDS, LEGACY_FIELDS, Ledger, accounting_day, parse_balance
 from gui import App, ComboEditor, DebugOverlay
 from models import Combo, Profile
-from screen_capture import ScreenCapture
+from screen_capture import ScreenCapture, _balance_templates, _template_balance
 import tkinter as tk
 
 
@@ -58,7 +59,7 @@ class CalcTests(unittest.TestCase):
     def test_load_migrates_cross_day_change_to_daily_baseline(self):
         with tempfile.TemporaryDirectory() as folder:
             profile, combo = Profile(), Combo()
-            rows = [dict(zip(FIELDS, values)) for values in (
+            rows = [dict(zip(LEGACY_FIELDS, values)) for values in (
                 ("20260922235959", profile.id, profile.name, combo.id, combo.name,
                  "baseline", "440", "", "0", "440", ".9"),
                 ("20260923083455", profile.id, profile.name, combo.id, combo.name,
@@ -67,7 +68,7 @@ class CalcTests(unittest.TestCase):
             for date in ("20260922", "20260923"):
                 with (Path(folder) / f"{date}.csv").open(
                         "w", encoding="utf-8-sig", newline="") as stream:
-                    writer = csv.DictWriter(stream, fieldnames=FIELDS)
+                    writer = csv.DictWriter(stream, fieldnames=LEGACY_FIELDS)
                     writer.writeheader()
                     writer.writerow(next(row for row in rows if row["timestamp"].startswith(date)))
             ledger = Ledger(folder)
@@ -79,6 +80,28 @@ class CalcTests(unittest.TestCase):
             reloaded = Ledger(folder)
             reloaded.load()
             self.assertEqual(reloaded.rows[1]["previous_balance"], "")
+
+    def test_combo_daily_reset_time_uses_noon_boundary_after_reload(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ledger = Ledger(folder)
+            profile = Profile()
+            combo = Combo(detection_mode="background", calc_region=(0, 0, 4, 4),
+                          daily_reset_time="12:00")
+            for when, balance in ((datetime(2026, 9, 23, 11, 59), 500),
+                                  (datetime(2026, 9, 23, 12), 600),
+                                  (datetime(2026, 9, 24, 11, 59), 650),
+                                  (datetime(2026, 9, 24, 12), 700)):
+                ledger.record(profile, combo, balance, str(balance), .9, when)
+            self.assertEqual(ledger.snapshot(profile.id, combo.id, "20260923")[:3],
+                             (50, 0, 50))
+            self.assertEqual(accounting_day(datetime(2026, 9, 24, 11, 59), "12:00"),
+                             "20260923")
+            reloaded = Ledger(folder)
+            reloaded.load()
+            self.assertEqual(reloaded.snapshot(profile.id, combo.id, "20260923")[:3],
+                             (50, 0, 50))
+            self.assertEqual([row["record_type"] for row in reloaded.rows],
+                             ["baseline", "baseline", "change", "baseline"])
 
     def test_edit_balance_recalculates_following_deltas_and_csv(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -95,6 +118,24 @@ class CalcTests(unittest.TestCase):
             self.assertEqual([(row["previous_balance"], row["delta"])
                               for row in reloaded.rows], [("", "0"), ("100", "30"), ("130", "-10")])
             self.assertEqual(reloaded.last[(profile.id, combo.id)], 120)
+
+    def test_add_record_inserts_by_time_and_recalculates_following_delta(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ledger = Ledger(folder)
+            profile, combo = Profile(), Combo(daily_reset_time="12:00")
+            ledger.record(profile, combo, 212, "212", .9,
+                          datetime(2026, 9, 24, 12, 14, 37))
+            ledger.record(profile, combo, 137, "137", .9,
+                          datetime(2026, 9, 24, 13, 24, 52))
+            ledger.add_record(profile, combo, datetime(2026, 9, 24, 13), 280)
+            self.assertEqual([(row["balance"], row["delta"]) for row in ledger.rows],
+                             [("212", "0"), ("280", "68"), ("137", "-143")])
+            self.assertEqual(ledger.snapshot(profile.id, combo.id, "20260924")[:3],
+                             (68, 143, -75))
+            reloaded = Ledger(folder)
+            reloaded.load()
+            self.assertEqual([row["balance"] for row in reloaded.rows],
+                             ["212", "280", "137"])
 
     def test_delete_record_recalculates_following_delta_and_baseline(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -208,6 +249,39 @@ class CalcTests(unittest.TestCase):
         capture.match_template.return_value = (False, .1, None)
         capture.read_balance(combo, frame, (100, 200, 100, 100))
         self.assertEqual(capture.get_balance_debug(), (False, .1, None, None))
+
+    def test_balance_ocr_isolates_white_digits_from_color_frame(self):
+        combo = Combo(image_path="icon", calc_region=(0, 0, 4, 4))
+        capture = ScreenCapture()
+        capture.match_template = Mock(return_value=(True, 1, (2, 2)))
+        capture.get_match_size = Mock(return_value=(4, 4))
+        capture.get_template_size = Mock(return_value=(4, 4))
+        capture._tesseract_balance = Mock(return_value=("115", .9))
+        capture._ocr_reader = Mock()
+        frame = np.full((4, 4, 3), (240, 190, 40), dtype=np.uint8)
+        frame[1:3, 1:3] = (255, 255, 255)
+
+        def readtext(image, **_kwargs):
+            self.assertEqual(image.shape, (8, 8))
+            self.assertEqual(set(np.unique(image)), {0, 255})
+            return [(None, "795", .9)]
+
+        capture._ocr_reader.readtext.side_effect = readtext
+        self.assertEqual(capture.read_balance(combo, frame)[0], 795)
+        capture._tesseract_balance.assert_not_called()
+
+    def test_fixed_digit_templates_read_scaled_balance(self):
+        templates = _balance_templates()
+        separator = np.zeros((32, 3), dtype=np.uint8)
+        mask = np.concatenate([
+            templates["2"][0].astype(np.uint8) * 255, separator,
+            templates["8"][0].astype(np.uint8) * 255, separator,
+            templates["0"][0].astype(np.uint8) * 255,
+        ], axis=1)
+        mask = cv2.resize(mask, None, fx=.8, fy=.8, interpolation=cv2.INTER_NEAREST)
+        text, confidence = _template_balance(mask, templates)
+        self.assertEqual(text, "280")
+        self.assertGreater(confidence, .7)
 
     def test_tesseract_balance_reads_single_number(self):
         capture = ScreenCapture()

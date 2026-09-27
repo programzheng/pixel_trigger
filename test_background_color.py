@@ -79,12 +79,13 @@ class BackgroundColorExperiment(unittest.TestCase):
         self.assertIsNone(find_color_marker(yellow, settings))
 
     def test_available_real_green_zone_image(self):
-        path = Path(__file__).parent / "dist/pyinstaller/pixel_trigger/templates/fish_hold.jpg"
+        path = Path(__file__).parent / "dist/pyinstaller/pixel_trigger/templates/fish_hold.png"
         if not path.exists():
             self.skipTest("本機碼表截圖不存在；模擬測試仍可獨立執行")
         frame = np.array(Image.open(path).convert("RGB"))
-        settings = PositionControl(region_space="screen", color=(255, 170, 41),
-                                   tolerance=15, min_area=500, max_area=2000)
+        settings = PositionControl(region_space="template", region=(10, 3, 276, 99),
+                                   color=(255, 170, 41), tolerance=5,
+                                   min_area=150, max_area=280)
         marker = find_color_marker(frame, settings)
         self.assertIsNotNone(marker)
         action, ratios = background_action(frame, marker[1])

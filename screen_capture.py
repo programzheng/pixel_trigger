@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -127,6 +128,63 @@ def _easyocr_model_dir() -> str | None:
     return local if os.path.isdir(local) else None
 
 
+def _balance_templates():
+    base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "assets", "balance_digits.json")
+    if not os.path.isfile(path):
+        path = os.path.join(os.path.dirname(sys.executable), "assets", "balance_digits.json")
+    try:
+        with open(path, encoding="utf-8") as stream:
+            data = json.load(stream)
+        return {digit: [np.array([
+            [(int(row, 16) >> (23 - x)) & 1 for x in range(24)] for row in sample
+        ], dtype=bool) for sample in samples] for digit, samples in data.items()}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _normalize_digit(mask):
+    ys, xs = np.where(mask > 0)
+    if not len(xs):
+        return None
+    mask = mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    scale = min(20 / mask.shape[1], 28 / mask.shape[0])
+    width, height = max(1, round(mask.shape[1] * scale)), max(1, round(mask.shape[0] * scale))
+    digit = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST) > 0
+    result = np.zeros((32, 24), dtype=bool)
+    x, y = (24 - width) // 2, (32 - height) // 2
+    result[y:y + height, x:x + width] = digit
+    return result
+
+
+def _template_balance(mask, templates):
+    columns = np.where(np.any(mask, axis=0))[0]
+    runs = []
+    for x in columns:
+        if not runs or x > runs[-1][-1] + 1:
+            runs.append([int(x)])
+        else:
+            runs[-1].append(int(x))
+    parts = [mask[:, run[0]:run[-1] + 1] for run in runs if len(run) >= 2]
+    if not parts or not templates:
+        return None
+    text, confidence = "", 1.0
+    for part in parts:
+        digit = _normalize_digit(part)
+        scores = {}
+        for label, samples in templates.items():
+            scores[label] = max(
+                np.logical_and(digit, np.roll(sample, (dy, dx), (0, 1))).sum()
+                / np.logical_or(digit, np.roll(sample, (dy, dx), (0, 1))).sum()
+                for sample in samples for dy in range(-2, 3) for dx in range(-2, 3))
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        if ranked[0][1] < 0.62 or ranked[0][1] - ranked[1][1] < 0.04:
+            return None
+        text += ranked[0][0]
+        confidence = min(confidence, ranked[0][1])
+    return text, float(confidence)
+
+
 class ScreenCapture:
     """螢幕截圖 + OpenCV 模板比對 + OCR 文字驗證"""
 
@@ -145,6 +203,7 @@ class ScreenCapture:
             self._tesseract_path = standard_path if os.path.isfile(standard_path) else None
         # easyocr Reader（lazy init，首次使用時才載入）
         self._ocr_reader = None
+        self._balance_templates = _balance_templates()
 
     def load_template(self, path: str) -> bool:
         """載入模板圖片到快取，回傳是否成功。
@@ -371,8 +430,10 @@ class ScreenCapture:
         """Locate a fixed icon, then OCR its scaled relative number region."""
         from calc import parse_balance
 
+        match_frame = (cv2.cvtColor(frame[:, :, :3], cv2.COLOR_RGB2GRAY)
+                       if frame.ndim == 3 else frame)
         found, score, pos = self.match_template(
-            frame, combo.image_path, combo.match_threshold, region)
+            match_frame, combo.image_path, combo.match_threshold, region)
         self._match_state.balance_debug = (found, score, None, None)
         if not found or pos is None:
             return None, "找不到定位圖片", 0.0, None
@@ -391,10 +452,23 @@ class ScreenCapture:
         if x < 0 or y < 0 or x + width > frame.shape[1] or y + height > frame.shape[0]:
             return None, "數字區域超出擷取範圍", 0.0, None
         roi = frame[y:y + height, x:x + width]
-        enlarged = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        if roi.ndim == 3:
+            hsv = cv2.cvtColor(roi[:, :, :3], cv2.COLOR_RGB2HSV)
+            digits = cv2.inRange(hsv, np.array((0, 0, 170)), np.array((179, 30, 255)))
+            enlarged = cv2.resize(
+                digits, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+        else:
+            enlarged = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        result = _template_balance(digits, self._balance_templates) if roi.ndim == 3 else None
         with self._ocr_lock:
-            result = self._tesseract_balance(cv2.resize(
-                roi, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC))
+            if result is None and roi.ndim != 3:
+                result = self._tesseract_balance(cv2.resize(
+                    roi, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC))
+            if result is not None:
+                try:
+                    parse_balance(result[0])
+                except ValueError:
+                    result = None
             if result is None:
                 self._ensure_ocr()
                 results = self._ocr_reader.readtext(enlarged, allowlist="0123456789,")

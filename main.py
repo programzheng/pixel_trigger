@@ -1,8 +1,6 @@
 """PixelTrigger — 通用圖像觸發自動化工具"""
 
 from gui import App
-import ctypes
-ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
 
 def main():
