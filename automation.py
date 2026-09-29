@@ -313,7 +313,7 @@ class HookEngine:
         if self._profile and self._profile.window_title and self._scan_region() != region:
             return
         self._prev_visible[combo.id] = found
-        detail = f"圖片分數={confidence:.3f}／閾值={combo.match_threshold:.3f}" if combo.image_path else ""
+        detail = f"圖片分數={confidence:.6f}／閾值={combo.match_threshold:.6f}" if combo.image_path else ""
         if combo.verify_text:
             detail += f" OCR分數={text_conf:.3f}／閾值={combo.text_threshold:.3f} 文字模式={combo.text_match_mode.value}"
         if found and combo.trigger == TriggerMode.ON_APPEAR:
@@ -329,9 +329,9 @@ class HookEngine:
         # Debug log
         if found:
             extra = f" text_conf={text_conf:.3f}" if combo.verify_text else ""
-            print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 偵測到! confidence={confidence:.3f}{extra}")
+            print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 偵測到! confidence={confidence:.6f}{extra}")
         elif not found and was_visible:
-            print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 消失了 confidence={confidence:.3f}")
+            print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 消失了 confidence={confidence:.6f}")
 
         if combo.trigger == TriggerMode.ON_APPEAR:
             if found and not was_visible:
@@ -433,7 +433,7 @@ class HookEngine:
             scale_limit=1, stop_event=stop_event,
         )
         self._log(combo, "點擊目標圖片通過" if found else "點擊目標圖片未通過",
-                  f"分數={_confidence:.3f}／閾值={action.target_threshold:.3f}", category="target", level="info" if found else "failure")
+                  f"分數={_confidence:.6f}／閾值={action.target_threshold:.6f}", category="target", level="info" if found else "failure")
         if (not found or pos is None or stop_event.is_set() or self._stop_event.is_set()
                 or self._scan_region() != region):
             return
@@ -579,7 +579,7 @@ class HookEngine:
                     combo, self._stop_event, scan_region=region)
                 marker = find_color_marker(frame, settings)
                 score = self._capture.get_position_confidence()
-                detail = f"定位分數={score:.3f}／閾值={combo.match_threshold:.3f}"
+                detail = f"定位分數={score:.6f}／閾值={combo.match_threshold:.6f}"
                 reason = ""
                 if frame is None:
                     reason = "圖片定位未通過" if score < combo.match_threshold else "追蹤區域無法擷取"
