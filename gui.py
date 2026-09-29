@@ -818,7 +818,7 @@ class App:
                 status_str = self._background_results.get(combo.id, "")
             elif self._debug_mode.get() and combo.id in self._debug_data:
                 found, conf = self._debug_data[combo.id][:2]
-                status_str = f"{conf:.2f} O" if found else f"{conf:.2f} X"
+                status_str = f"{conf:.6f} O" if found else f"{conf:.6f} X"
             else:
                 active = self._combo_active.get(combo.id, False)
                 status_str = ">>>" if active else ""
@@ -1332,7 +1332,10 @@ class ComboEditor:
         ttk.Label(frm_thresh, text="圖片閾值:").pack(side="left")
         self.var_threshold = tk.StringVar(value=str(combo.match_threshold))
         ttk.Entry(frm_thresh, textvariable=self.var_threshold, width=8).pack(side="left", padx=5)
-        ttk.Label(frm_thresh, text="(0.0~1.0, 越高越嚴格)").pack(side="left")
+        ttk.Label(
+            frm_thresh,
+            text="(0.0~1.0；1.0 僅接受完全匹配，建議最高 0.99)",
+        ).pack(side="left")
 
         # 文字驗證（可選）— 分兩行避免溢出
         frm_vtext1 = ttk.Frame(sf)
@@ -2514,7 +2517,7 @@ class DebugOverlay:
                 outline=color, width=2,
             )
             # 標籤背景（用色塊遮住以利閱讀）
-            label = f" {name}  {conf:.2f} "
+            label = f" {name}  {conf:.6f} "
             self.canvas.create_rectangle(
                 x - edge, y - edge - 20, x + len(label) * 7, y - edge,
                 fill=color, outline="",
