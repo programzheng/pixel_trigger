@@ -15,6 +15,54 @@ from PIL import ImageGrab
 from models import Combo, PositionControl
 
 
+def _find_tesseract() -> tuple[str | None, str | None]:
+    """Find the bundled OCR runtime first, then development installations."""
+    bases = [os.path.dirname(os.path.abspath(__file__)), os.path.dirname(sys.executable)]
+    candidates = [os.path.join(base, "tesseract", "tesseract.exe") for base in bases]
+    on_path = shutil.which("tesseract")
+    if on_path:
+        candidates.append(on_path)
+    candidates.append(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+    for executable in candidates:
+        if os.path.isfile(executable):
+            tessdata = os.path.join(os.path.dirname(executable), "tessdata")
+            return executable, tessdata if os.path.isdir(tessdata) else None
+    return None, None
+
+
+def _run_tesseract(image, executable, tessdata, *, psm, languages, whitelist=None):
+    """Return recognized TSV words as ``(text, confidence)`` pairs."""
+    if not executable or image is None or image.size == 0:
+        return []
+    ok, png = cv2.imencode(".png", image)
+    if not ok:
+        return []
+    command = [executable, "stdin", "stdout", "--psm", str(psm), "-l", languages]
+    if tessdata:
+        command.extend(("--tessdata-dir", tessdata))
+    if whitelist:
+        command.extend(("-c", f"tessedit_char_whitelist={whitelist}"))
+    command.append("tsv")
+    try:
+        completed = subprocess.run(
+            command, input=png.tobytes(), capture_output=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if completed.returncode:
+            return []
+        words = []
+        for row in completed.stdout.decode("utf-8").splitlines()[1:]:
+            columns = row.split("\t", 11)
+            if len(columns) < 12 or not columns[11].strip():
+                continue
+            confidence = float(columns[10])
+            if confidence >= 0:
+                words.append((columns[11].strip(), min(confidence, 100.0) / 100.0))
+        return words
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
+        return []
+
+
 def find_color_marker(frame: np.ndarray, settings: PositionControl):
     """從 RGB 區域找唯一的色彩標記；多個候選時不猜測。"""
     # ponytail: 顏色與面積需能排除背景；同大小的同色色塊仍需形狀辨識。
@@ -118,16 +166,6 @@ def _refine_template_match(frame, template, mask, match, stop_event):
     return match
 
 
-def _easyocr_model_dir() -> str | None:
-    """回傳打包後的模型目錄路徑，開發模式或目錄不存在時回傳 None（使用預設 ~/.EasyOCR/）。"""
-    if getattr(sys, '__compiled__', False):
-        base = os.path.dirname(sys.executable)
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
-    local = os.path.join(base, "models")
-    return local if os.path.isdir(local) else None
-
-
 def _balance_templates():
     base = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(base, "assets", "balance_digits.json")
@@ -197,12 +235,7 @@ class ScreenCapture:
         self._last_matches: dict[str, tuple] = {}
         self._scale_offsets: dict[str, int] = {}
         self._ocr_lock = threading.Lock()
-        self._tesseract_path = shutil.which("tesseract")
-        if not self._tesseract_path:
-            standard_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-            self._tesseract_path = standard_path if os.path.isfile(standard_path) else None
-        # easyocr Reader（lazy init，首次使用時才載入）
-        self._ocr_reader = None
+        self._tesseract_path, self._tessdata_dir = _find_tesseract()
         self._balance_templates = _balance_templates()
 
     def load_template(self, path: str) -> bool:
@@ -461,18 +494,14 @@ class ScreenCapture:
             enlarged = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
         result = _template_balance(digits, self._balance_templates) if roi.ndim == 3 else None
         with self._ocr_lock:
-            if result is None and roi.ndim != 3:
+            if result is None:
                 result = self._tesseract_balance(cv2.resize(
-                    roi, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC))
+                    enlarged, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC))
             if result is not None:
                 try:
                     parse_balance(result[0])
                 except ValueError:
                     result = None
-            if result is None:
-                self._ensure_ocr()
-                results = self._ocr_reader.readtext(enlarged, allowlist="0123456789,")
-                result = (results[0][1], float(results[0][2])) if len(results) == 1 else None
         text, confidence = result or ("", 0.0)
         if result is None or confidence < combo.text_threshold:
             return None, text or "OCR 無有效數字", confidence, roi
@@ -483,37 +512,21 @@ class ScreenCapture:
         return value, text, confidence, roi
 
     def _tesseract_balance(self, image):
-        if not self._tesseract_path:
-            return None
-        ok, png = cv2.imencode(".png", image)
-        if not ok:
-            return None
-        try:
-            completed = subprocess.run(
-                [self._tesseract_path, "stdin", "stdout", "--psm", "7", "-l", "eng",
-                 "-c", "tessedit_char_whitelist=0123456789,", "tsv"],
-                input=png.tobytes(), capture_output=True, timeout=5,
-            )
-            if completed.returncode:
-                return None
-            rows = [line.split("\t") for line in completed.stdout.decode("utf-8").splitlines()[1:]]
-            words = [(row[11].strip(), float(row[10]) / 100) for row in rows
-                     if len(row) > 11 and row[11].strip()]
-            return words[0] if len(words) == 1 else None
-        except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
-            return None
+        words = _run_tesseract(
+            image, self._tesseract_path, self._tessdata_dir,
+            psm=7, languages="eng", whitelist="0123456789,",
+        )
+        return words[0] if len(words) == 1 else None
 
     def get_balance_debug(self):
         return getattr(self._match_state, "balance_debug", (False, 0.0, None, None))
 
-    def _ensure_ocr(self):
-        """Lazy-load easyocr Reader（首次呼叫時約需數秒）"""
-        if self._ocr_reader is None:
-            import easyocr
-            self._ocr_reader = easyocr.Reader(
-                ["ch_tra", "en"], gpu=False, verbose=False,
-                model_storage_directory=_easyocr_model_dir(),
-            )
+    def ocr_available(self) -> bool:
+        return bool(
+            self._tesseract_path and self._tessdata_dir
+            and all(os.path.isfile(os.path.join(self._tessdata_dir, name))
+                    for name in ("eng.traineddata", "chi_tra.traineddata"))
+        )
 
     def ocr_verify(
         self,
@@ -532,16 +545,15 @@ class ScreenCapture:
 
         # ponytail: OCR 共用一份模型並序列化；需要平行 OCR 時再拆 reader。
         with self._ocr_lock:
-            self._ensure_ocr()
-            try:
-                results = self._ocr_reader.readtext(roi)
-            except Exception:
-                return False, 0.0, ""
+            results = _run_tesseract(
+                roi, self._tesseract_path, self._tessdata_dir,
+                psm=6, languages="chi_tra+eng",
+            )
 
         best_conf = 0.0
-        all_texts = [text for _bbox, text, _conf in results]
+        all_texts = [text for text, _conf in results]
         detected_str = " | ".join(all_texts)
-        confs = [conf for _bbox, _text, conf in results]
+        confs = [conf for _text, conf in results]
         avg_conf = sum(confs) / len(confs) if confs else 0.0
 
         # 先對「所有片段合併」做一次整體比對（解決 OCR 切段問題）
@@ -552,7 +564,7 @@ class ScreenCapture:
             best_conf = max(best_conf, avg_conf)
 
         # 再逐段比對
-        for _bbox, text, conf in results:
+        for text, conf in results:
             matched = self._text_match(
                 expected_text, text, match_mode, match_ratio)
             if matched and conf >= threshold:
@@ -580,30 +592,22 @@ class ScreenCapture:
 # ── 獨立 OCR 工具函式（GUI 等外部模組使用）─────────────────
 
 
-_shared_ocr_reader = None
-
-
 def ocr_read_image(path: str) -> str:
     """讀取圖片檔中的所有文字，回傳合併字串。首次呼叫需數秒載入模型。
-    若 easyocr 未安裝則回傳空字串。
+    若 Tesseract 不可用則回傳空字串。
     """
-    global _shared_ocr_reader
-    if _shared_ocr_reader is None:
-        try:
-            import easyocr
-        except ImportError:
-            return ""
-        _shared_ocr_reader = easyocr.Reader(
-            ["ch_tra", "en"], gpu=False, verbose=False,
-            model_storage_directory=_easyocr_model_dir(),
-        )
     try:
         buf = np.fromfile(path, dtype=np.uint8)
         img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
         if img is None:
             return ""
-        results = _shared_ocr_reader.readtext(img)
-        return "".join(text for _, text, _ in results)
+        capture = ScreenCapture()
+        with capture._ocr_lock:
+            words = _run_tesseract(
+                img, capture._tesseract_path, capture._tessdata_dir,
+                psm=6, languages="chi_tra+eng",
+            )
+        return "".join(text for text, _confidence in words)
     except Exception:
         return ""
 
@@ -613,17 +617,6 @@ def ocr_from_screen(image_path: str, threshold: float = 0.8) -> str:
     與 runtime 使用相同管道，確保 verify_text 和執行期結果一致。
     若模板未找到或發生錯誤，回傳空字串。
     """
-    global _shared_ocr_reader
-    if _shared_ocr_reader is None:
-        try:
-            import easyocr
-        except ImportError:
-            return ""
-        _shared_ocr_reader = easyocr.Reader(
-            ["ch_tra", "en"], gpu=False, verbose=False,
-            model_storage_directory=_easyocr_model_dir(),
-        )
-
     try:
         # 截彩色全螢幕
         screenshot = ImageGrab.grab()
@@ -652,8 +645,9 @@ def ocr_from_screen(image_path: str, threshold: float = 0.8) -> str:
     if roi.size == 0:
         return ""
 
-    try:
-        results = _shared_ocr_reader.readtext(roi)
-        return "".join(text for _, text, _ in results)
-    except Exception:
-        return ""
+    with sc._ocr_lock:
+        words = _run_tesseract(
+            roi, sc._tesseract_path, sc._tessdata_dir,
+            psm=6, languages="chi_tra+eng",
+        )
+    return "".join(text for text, _confidence in words)

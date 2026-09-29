@@ -76,6 +76,9 @@ class HookEngine:
         if self._running or not self._profile or (self._thread and self._thread.is_alive()):
             return
         profile = self._profile
+        if (any(combo.enabled and combo.verify_text for combo in profile.combos)
+                and not self._capture.ocr_available()):
+            raise ValueError("Tesseract OCR runtime or tessdata is unavailable.")
         if profile.window_title:
             if not profile.window_handle:
                 matches = [(hwnd, pid) for hwnd, title, pid in list_windows()

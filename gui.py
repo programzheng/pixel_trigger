@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import collections
 import logging
+import sys
 from logging.handlers import TimedRotatingFileHandler
 import time
 import warnings
@@ -64,6 +65,14 @@ MOUSE_BTN_LABELS = {
     MouseButton.RIGHT: "右鍵",
     MouseButton.MIDDLE: "中鍵",
 }
+
+
+def _third_party_notices():
+    for base in (Path(__file__).resolve().parent, Path(sys.executable).resolve().parent):
+        path = base / "THIRD_PARTY_NOTICES.txt"
+        if path.is_file():
+            return path.read_text(encoding="utf-8", errors="replace")
+    raise FileNotFoundError("THIRD_PARTY_NOTICES.txt was not found.")
 
 
 def _create_log_logger():
@@ -274,6 +283,7 @@ class App:
         ).pack(side="left", padx=10)
         ttk.Button(frm_ctrl, text="記帳統計", command=self._show_calc).pack(side="left")
         ttk.Button(frm_ctrl, text="設定快捷鍵", command=self._configure_hotkeys).pack(side="left", padx=5)
+        ttk.Button(frm_ctrl, text="關於／第三方授權", command=self._show_about).pack(side="right")
         self._refresh_hotkeys()
 
     # ══════════════════════════════════════════════════════
@@ -285,6 +295,23 @@ class App:
         dark = self.root.style.theme.name == "litera"
         self.root.style.theme_use("darkly" if dark else "litera")
         self.btn_theme.config(text="切換亮色" if dark else "切換深色")
+
+    def _show_about(self):
+        try:
+            notices = _third_party_notices()
+        except OSError as error:
+            messagebox.showerror("第三方授權", str(error), parent=self.root)
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Pixel Trigger 0.2.0 — 第三方授權")
+        win.geometry("760x560")
+        text = tk.Text(win, wrap="word")
+        scroll = ttk.Scrollbar(win, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        text.pack(fill="both", expand=True, padx=(10, 0), pady=10)
+        text.insert("1.0", notices)
+        text.configure(state="disabled")
 
     def _follow_system_theme(self):
         if self._theme_manual or self._closing:

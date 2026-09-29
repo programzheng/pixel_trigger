@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,12 +7,27 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from screen_capture import MATCH_SCALES, ScreenCapture
+from screen_capture import MATCH_SCALES, ScreenCapture, _run_tesseract
 from automation import HookEngine
 from models import Combo, Profile
 
 
 class MultiScaleMatchTest(unittest.TestCase):
+    def test_tesseract_tsv_confidence_is_normalized(self):
+        output = (b"level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+                  b"5\t1\t1\t1\t1\t1\t0\t0\t10\t10\t87.5\tReady\n")
+        completed = Mock(returncode=0, stdout=output)
+        with patch("screen_capture.cv2.imencode", return_value=(True, np.array([1], dtype=np.uint8))), \
+                patch("screen_capture.subprocess.run", return_value=completed) as run:
+            words = _run_tesseract(
+                np.zeros((2, 2), dtype=np.uint8), "tesseract.exe", "tessdata",
+                psm=6, languages="chi_tra+eng",
+            )
+        self.assertEqual(words, [("Ready", 0.875)])
+        self.assertIn("--tessdata-dir", run.call_args.args[0])
+        self.assertEqual(
+            run.call_args.kwargs["creationflags"], subprocess.CREATE_NO_WINDOW)
+
     def test_threshold_only_changes_acceptance_not_search_or_refinement(self):
         template = np.random.default_rng(31).integers(30, 230, (20, 20), dtype=np.uint8)
         frame = np.zeros((100, 100), dtype=np.uint8)
