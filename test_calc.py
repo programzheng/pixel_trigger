@@ -235,16 +235,13 @@ class CalcTests(unittest.TestCase):
         capture.match_template = Mock(return_value=(True, 1, (120, 220)))
         capture.get_match_size = Mock(return_value=(20, 20))
         capture.get_template_size = Mock(return_value=(10, 10))
-        capture._tesseract_path = None
-        capture._ocr_reader = Mock()
-        capture._ocr_reader.readtext.return_value = [(None, "324", .99)]
+        capture._tesseract_balance = Mock(side_effect=[("324", .99), ("324", .1)])
         frame = np.zeros((100, 100), dtype=np.uint8)
         value, _, _, roi = capture.read_balance(combo, frame, (100, 200, 100, 100))
         self.assertEqual(value, 324)
         self.assertEqual(roi.shape, (12, 20))
         self.assertEqual(capture.get_balance_debug(),
                          (True, 1, (110, 210, 20, 20), (134, 206, 20, 12)))
-        capture._ocr_reader.readtext.return_value = [(None, "324", .1)]
         self.assertIsNone(capture.read_balance(combo, frame, (100, 200, 100, 100))[0])
         capture.match_template.return_value = (False, .1, None)
         capture.read_balance(combo, frame, (100, 200, 100, 100))
@@ -256,19 +253,18 @@ class CalcTests(unittest.TestCase):
         capture.match_template = Mock(return_value=(True, 1, (2, 2)))
         capture.get_match_size = Mock(return_value=(4, 4))
         capture.get_template_size = Mock(return_value=(4, 4))
-        capture._tesseract_balance = Mock(return_value=("115", .9))
-        capture._ocr_reader = Mock()
+        capture._tesseract_balance = Mock()
         frame = np.full((4, 4, 3), (240, 190, 40), dtype=np.uint8)
         frame[1:3, 1:3] = (255, 255, 255)
 
-        def readtext(image, **_kwargs):
-            self.assertEqual(image.shape, (8, 8))
-            self.assertEqual(set(np.unique(image)), {0, 255})
-            return [(None, "795", .9)]
+        def readtext(image):
+            self.assertEqual(image.shape, (16, 16))
+            self.assertEqual((image.min(), image.max()), (0, 255))
+            return "795", .9
 
-        capture._ocr_reader.readtext.side_effect = readtext
+        capture._tesseract_balance.side_effect = readtext
         self.assertEqual(capture.read_balance(combo, frame)[0], 795)
-        capture._tesseract_balance.assert_not_called()
+        capture._tesseract_balance.assert_called_once()
 
     def test_fixed_digit_templates_read_scaled_balance(self):
         templates = _balance_templates()
@@ -286,6 +282,7 @@ class CalcTests(unittest.TestCase):
     def test_tesseract_balance_reads_single_number(self):
         capture = ScreenCapture()
         capture._tesseract_path = "tesseract"
+        capture._tessdata_dir = None
         output = (b"level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
                   b"5\t1\t1\t1\t1\t1\t0\t0\t20\t10\t83.5\t64\n")
         with patch("screen_capture.subprocess.run", return_value=Mock(returncode=0, stdout=output)):

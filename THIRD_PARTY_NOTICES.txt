@@ -1,0 +1,85 @@
+Pixel Trigger - Third-Party Notices
+===================================
+
+Pixel Trigger includes open-source software. Commercial use of Pixel Trigger
+does not remove the notice, attribution, source-offer, or other obligations of
+those components. The release build appends the exact license files installed
+for every bundled Python distribution and the approved Tesseract runtime.
+
+Bundled component families include CPython and Tcl/Tk; OpenCV and its native
+libraries; NumPy; Pillow; MSS; keyboard; PyAutoGUI and its permissively licensed
+runtime helpers; ttkbootstrap; Tesseract OCR; Leptonica; and the English and
+Traditional Chinese Tesseract language data. Build tools are not distributed
+except for Nuitka runtime code covered by the Nuitka Runtime Library Exception,
+or PyInstaller bootloader/runtime files covered by its Bootloader Exception.
+
+MouseInfo, EasyOCR, python-bidi, PyTorch, and torchvision are explicitly
+excluded from release artifacts.
+
+Project license sources:
+
+- CPython: https://docs.python.org/3/license.html
+- Tcl/Tk: https://www.tcl-lang.org/software/tcltk/license.html
+- OpenCV: https://github.com/opencv/opencv/blob/4.x/LICENSE
+- NumPy: https://numpy.org/doc/stable/license.html
+- Pillow: https://github.com/python-pillow/Pillow/blob/main/LICENSE
+- MSS: https://github.com/BoboTiG/python-mss/blob/main/LICENSE.txt
+- keyboard: https://github.com/boppreh/keyboard/blob/master/LICENSE.txt
+- PyAutoGUI: https://github.com/asweigart/pyautogui/blob/master/LICENSE.txt
+- ttkbootstrap: https://github.com/israel-dryer/ttkbootstrap/blob/master/LICENSE
+- Tesseract: https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE
+- tessdata: https://github.com/tesseract-ocr/tessdata_fast/blob/main/LICENSE
+- Nuitka runtime exception:
+  https://github.com/Nuitka/Nuitka/blob/main/LICENSE-RUNTIME.txt
+- PyInstaller and Bootloader Exception:
+  https://github.com/pyinstaller/pyinstaller/blob/develop/COPYING.txt
+
+The generated release copy continues below with the complete license material
+found in the locked build environment. Do not distribute a build if generation
+fails or if the build report contains an unreviewed component.
+
+MIT License (used by keyboard and other listed components)
+----------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Leptonica license
+-----------------
+
+Copyright (C) 2001-2020 Leptonica. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL ANY CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

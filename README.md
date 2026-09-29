@@ -9,7 +9,7 @@ configurable mouse, keyboard, and sound actions through a Tkinter interface.
 ## Features
 
 - Match images at multiple scales with OpenCV.
-- Verify Traditional Chinese and English text with EasyOCR.
+- Verify Traditional Chinese and English text with Tesseract OCR.
 - Track colored markers and color bands inside selected regions.
 - Trigger clicks, key presses, holds, rapid input, or sound alerts.
 - Restrict capture to a screen region or a selected application window.
@@ -35,11 +35,12 @@ uv sync --dev
 uv run python main.py
 ```
 
-EasyOCR downloads its language models on first use. To prepare local model
-files before creating an offline build, run:
+Text verification requires Tesseract with the `eng` and `chi_tra` language
+data. Development mode detects a PATH installation or the default Windows
+installation. Before creating an audited offline build, run:
 
 ```powershell
-uv run python prepare_models.py
+uv run python prepare_tesseract.py
 ```
 
 ## Usage
@@ -68,12 +69,15 @@ Some UI and Windows integration behavior should also be verified manually.
 Create the default Nuitka one-file executable:
 
 ```powershell
-uv run python prepare_models.py
+uv run python prepare_tesseract.py
 uv run python build.py
 ```
 
 The executable is written to `dist/pixel_trigger.exe`. Alternative build modes
-are available with `--standalone` and `--pyinstaller`.
+are available with `--standalone` and `--pyinstaller`. The build also writes
+`THIRD_PARTY_NOTICES.txt` beside the executable and exposes it from the About
+window. Do not distribute a build if notice generation or dependency auditing
+fails.
 
 ## Project Structure
 

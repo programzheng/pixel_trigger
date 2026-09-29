@@ -10,6 +10,13 @@ from models import Action, ActionType, Combo, Profile, TriggerMode, PositionCont
 
 
 class ResponsiveAutomationTest(unittest.TestCase):
+    def test_start_rejects_text_verification_without_ocr_runtime(self):
+        engine = HookEngine()
+        engine.set_profile(Profile(combos=[Combo(verify_text="Ready")]))
+        with patch.object(engine._capture, "ocr_available", return_value=False), \
+                self.assertRaisesRegex(ValueError, "Tesseract"):
+            engine.start()
+
     def test_sound_is_a_combo_action_with_delay_cancellation_and_rearming(self):
         combo = Combo(image_path="trigger.png", action=Action(action_type=ActionType.PLAY_SOUND))
         engine = HookEngine()

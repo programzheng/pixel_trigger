@@ -80,16 +80,25 @@ class PositionControlTest(unittest.TestCase):
         frames = [self.frame(x) for x in (60, 30, 60, 80, 60, 30, None, 30)]
         sent = []
         sleeps = 0
+        pressed = threading.Event()
+
+        def mouse_down(**_kwargs):
+            sent.append("down")
+            pressed.set()
 
         def advance(seconds, event):
             nonlocal sleeps
             sleeps += 1
+            if sleeps in (2, 6, 8):
+                self.assertTrue(pressed.wait(1))
+                pressed.clear()
             if sleeps == len(frames):
                 event.set()
 
-        with patch.object(engine._capture, "grab_frame", side_effect=frames), \
+        positioned = [(frame, (0, 0, frame.shape[1], frame.shape[0])) for frame in frames]
+        with patch.object(engine._capture, "position_frame", side_effect=positioned), \
                 patch.object(engine, "_interruptible_sleep_event", side_effect=advance), \
-                patch.object(input_controller.pyautogui, "mouseDown", side_effect=lambda **kw: sent.append("down")), \
+                patch.object(input_controller.pyautogui, "mouseDown", side_effect=mouse_down), \
                 patch.object(input_controller, "release_mouse", side_effect=lambda button: sent.append("up")):
             engine._position_control_loop(self.combo, threading.Event())
         self.assertEqual(sent, ["down", "up", "down", "up", "down", "up"])
@@ -97,9 +106,14 @@ class PositionControlTest(unittest.TestCase):
     def test_capture_exception_releases_and_fail_safe_release_bypasses_guard(self):
         engine = HookEngine()
         engine.set_profile(Profile(combos=[self.combo]))
-        with patch.object(engine._capture, "grab_frame", side_effect=[self.frame(30), RuntimeError("capture")]), \
-                patch.object(engine, "_interruptible_sleep_event"), \
-                patch.object(input_controller.pyautogui, "mouseDown"), \
+        frame = self.frame(30)
+        pressed = threading.Event()
+        with patch.object(engine._capture, "position_frame", side_effect=[
+                (frame, (0, 0, frame.shape[1], frame.shape[0])), RuntimeError("capture")]), \
+                patch.object(engine, "_interruptible_sleep_event",
+                             side_effect=lambda *_args: self.assertTrue(pressed.wait(1))), \
+                patch.object(input_controller.pyautogui, "mouseDown",
+                             side_effect=lambda **_kwargs: pressed.set()), \
                 patch.object(input_controller, "release_mouse") as release:
             with self.assertRaises(RuntimeError):
                 engine._position_control_loop(self.combo, threading.Event())

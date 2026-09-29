@@ -9,7 +9,7 @@ Pixel Trigger 是一款 Windows 桌面自動化工具，能根據畫面上的視
 ## 功能特色
 
 - 使用 OpenCV 進行多尺度圖片比對。
-- 使用 EasyOCR 驗證繁體中文與英文文字。
+- 使用 Tesseract OCR 驗證繁體中文與英文文字。
 - 在指定區域內追蹤色彩標記與色帶。
 - 觸發點擊、按鍵、長按、連續輸入或提示音。
 - 將擷取範圍限制在指定螢幕區域或應用程式視窗。
@@ -35,10 +35,10 @@ uv sync --dev
 uv run python main.py
 ```
 
-EasyOCR 會在第一次使用時下載語言模型。若要在建立離線版本前準備本機模型，請執行：
+文字驗證需要 Tesseract 與 `eng`、`chi_tra` 語言資料。開發模式會偵測 PATH 或預設 Windows 安裝；建立可離線使用的版本前請執行：
 
 ```powershell
-uv run python prepare_models.py
+uv run python prepare_tesseract.py
 ```
 
 ## 使用方式
@@ -67,12 +67,14 @@ uv run python -m unittest discover
 建立預設的 Nuitka 單檔執行程式：
 
 ```powershell
-uv run python prepare_models.py
+uv run python prepare_tesseract.py
 uv run python build.py
 ```
 
 執行檔會輸出至 `dist/pixel_trigger.exe`。亦可使用 `--standalone` 或
-`--pyinstaller` 選擇其他建置模式。
+`--pyinstaller` 選擇其他建置模式。建置也會在執行檔旁產生
+`THIRD_PARTY_NOTICES.txt`，並可從「關於／第三方授權」視窗查看；
+授權檔產生或依賴稽核失敗時請勿散布。
 
 ## 專案結構
 
