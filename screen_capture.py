@@ -72,24 +72,28 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
     target = cv2.cvtColor(np.uint8([[settings.color]]), cv2.COLOR_RGB2HSV)[0, 0]
     hue_delta = np.abs(hsv[:, :, 0] - int(target[0]))
     hue_delta = np.minimum(hue_delta, 180 - hue_delta)
-    mask = ((hue_delta <= settings.tolerance)
-            & (np.abs(hsv[:, :, 1] - int(target[1])) <= 80)
-            & (np.abs(hsv[:, :, 2] - int(target[2])) <= 80)).astype(np.uint8)
-    if frame.shape[2] == 4:
-        mask[frame[:, :, 3] == 0] = 0
-    _, _, stats, centers = cv2.connectedComponentsWithStats(mask)
-    areas = stats[1:, cv2.CC_STAT_AREA]
     area_scale = 1.0
     if settings.max_area and settings.region_space == "template" and settings.region:
         area_scale = frame.shape[0] * frame.shape[1] / (settings.region[2] * settings.region[3])
-    eligible = areas >= settings.min_area * area_scale
-    if settings.max_area:
-        eligible &= areas <= settings.max_area * area_scale
-    candidates = np.flatnonzero(eligible) + 1
-    if len(candidates) != 1:
-        return None
-    index = candidates[0]
-    return tuple(centers[index]), tuple(int(v) for v in stats[index, :4])
+    # A nearby same-hue band can join the marker; tighten S/V only when no valid blob remains.
+    for sv_tolerance in (80, 60, 40, 20):
+        mask = ((hue_delta <= settings.tolerance)
+                & (np.abs(hsv[:, :, 1] - int(target[1])) <= sv_tolerance)
+                & (np.abs(hsv[:, :, 2] - int(target[2])) <= sv_tolerance)).astype(np.uint8)
+        if frame.shape[2] == 4:
+            mask[frame[:, :, 3] == 0] = 0
+        _, _, stats, centers = cv2.connectedComponentsWithStats(mask)
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        eligible = areas >= settings.min_area * area_scale
+        if settings.max_area:
+            eligible &= areas <= settings.max_area * area_scale
+        candidates = np.flatnonzero(eligible) + 1
+        if len(candidates) == 1:
+            index = candidates[0]
+            return tuple(centers[index]), tuple(int(v) for v in stats[index, :4])
+        if len(candidates) > 1:
+            return None
+    return None
 
 
 def color_band_state(frame, marker, settings: PositionControl, active=False):
