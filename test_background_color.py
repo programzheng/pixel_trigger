@@ -1,4 +1,4 @@
-"""Color-band classification checks, including the known same-color marker limit."""
+"""Color-band classification checks."""
 
 import math
 from pathlib import Path
@@ -70,13 +70,13 @@ class BackgroundColorExperiment(unittest.TestCase):
         frame = np.full((60, 60, 3), 255, dtype=np.uint8)
         self.assertEqual(background_action(frame, (20, 20, 10, 10))[0], "release")
 
-    def test_current_color_detector_loses_arrow_in_same_color_band(self):
+    def test_color_detector_keeps_arrow_in_same_color_band(self):
         settings = PositionControl(region_space="screen", color=(255, 170, 41),
                                    tolerance=15, min_area=40, max_area=500)
         green, _ = gauge_frame(-125)
         yellow, _ = gauge_frame(-50)
         self.assertIsNotNone(find_color_marker(green, settings))
-        self.assertIsNone(find_color_marker(yellow, settings))
+        self.assertIsNotNone(find_color_marker(yellow, settings))
 
     def test_available_real_green_zone_image(self):
         path = Path(__file__).parent / "dist/pyinstaller/pixel_trigger/templates/fish_hold.png"
