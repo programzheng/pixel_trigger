@@ -75,7 +75,7 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
     area_scale = 1.0
     if settings.max_area and settings.region_space == "template" and settings.region:
         area_scale = frame.shape[0] * frame.shape[1] / (settings.region[2] * settings.region[3])
-    # A nearby same-hue band can join the marker; tighten S/V only when no valid blob remains.
+    # A nearby same-hue band can join the marker; tighten S/V until one valid blob remains.
     for sv_tolerance in (80, 60, 40, 20):
         mask = ((hue_delta <= settings.tolerance)
                 & (np.abs(hsv[:, :, 1] - int(target[1])) <= sv_tolerance)
@@ -91,8 +91,6 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
         if len(candidates) == 1:
             index = candidates[0]
             return tuple(centers[index]), tuple(int(v) for v in stats[index, :4])
-        if len(candidates) > 1:
-            return None
     return None
 
 

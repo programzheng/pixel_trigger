@@ -78,6 +78,13 @@ class BackgroundColorExperiment(unittest.TestCase):
         self.assertIsNotNone(find_color_marker(green, settings))
         self.assertIsNotNone(find_color_marker(yellow, settings))
 
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        frame[5:15, 5:15] = settings.color
+        target = cv2.cvtColor(np.uint8([[settings.color]]), cv2.COLOR_RGB2HSV)[0, 0]
+        loose_color = np.uint8([[[target[0], target[1] - 50, target[2]]]])
+        frame[20:30, 20:30] = cv2.cvtColor(loose_color, cv2.COLOR_HSV2RGB)[0, 0]
+        self.assertIsNotNone(find_color_marker(frame, settings))
+
     def test_available_real_green_zone_image(self):
         path = Path(__file__).parent / "dist/pyinstaller/pixel_trigger/templates/fish_hold.png"
         if not path.exists():
