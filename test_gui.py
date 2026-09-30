@@ -108,6 +108,20 @@ class ComboScaleDisplayTest(unittest.TestCase):
             overlay.destroy()
             app.on_close()
 
+    def test_debug_overlay_is_click_through(self):
+        import ctypes
+
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        app.root.withdraw()
+        overlay = DebugOverlay(app.root)
+        try:
+            hwnd = ctypes.windll.user32.GetParent(overlay.win.winfo_id())
+            self.assertTrue(ctypes.windll.user32.GetWindowLongW(hwnd, -20) & 0x20)
+        finally:
+            overlay.destroy()
+            app.on_close()
+
     def test_combo_log_view_is_bounded_live_and_separate(self):
         with patch.object(App, "_load_initial_profile"):
             app = App()

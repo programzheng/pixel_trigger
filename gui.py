@@ -2496,7 +2496,7 @@ class DebugOverlay:
     def _set_click_through(self):
         try:
             import ctypes
-            hwnd = self.win.winfo_id()
+            hwnd = ctypes.windll.user32.GetParent(self.win.winfo_id())
             GWL_EXSTYLE = -20
             WS_EX_TRANSPARENT = 0x00000020
             style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
