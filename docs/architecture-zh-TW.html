@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pixel Trigger｜專案架構</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23102332'/%3E%3Cpath d='M12 32h13l5-13 7 26 5-13h10' fill='none' stroke='%2357b596' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #f4f7f8;
+      --surface: #ffffff;
+      --surface-2: #eaf0f2;
+      --surface-elevated: #fbfdfe;
+      --border: #c8d5da;
+      --border-strong: #91a8b1;
+      --text: #102332;
+      --text-dim: #526b76;
+      --accent: #1677a8;
+      --accent-soft: #dceef7;
+      --green: #2f7d62;
+      --green-soft: #dcefe7;
+      --amber: #a95e08;
+      --amber-soft: #f8e9d1;
+      --red: #b44a4a;
+      --red-soft: #f7e1e1;
+      --shadow: 0 12px 30px rgba(16, 35, 50, .08);
+      --font-body: "Segoe UI Variable", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1820;
+        --surface: #13242f;
+        --surface-2: #192e3a;
+        --surface-elevated: #172a36;
+        --border: #294451;
+        --border-strong: #496978;
+        --text: #e5f1f4;
+        --text-dim: #9bb3bd;
+        --accent: #68bde5;
+        --accent-soft: #173d52;
+        --green: #72c7a8;
+        --green-soft: #173d34;
+        --amber: #f0b45d;
+        --amber-soft: #45331e;
+        --red: #ee8b8b;
+        --red-soft: #49292c;
+        --shadow: 0 14px 34px rgba(0, 0, 0, .24);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { font-size: 16px; scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 2rem;
+      color: var(--text);
+      background-color: var(--bg);
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 32px 32px;
+      font: .9375rem/1.6 var(--font-body);
+      overflow-wrap: break-word;
+    }
+
+    .wrap {
+      max-width: 1360px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 12rem minmax(0, 1fr);
+      gap: 0 2.5rem;
+    }
+    .main, .grid > *, .pipeline > *, .split > * { min-width: 0; }
+
+    .toc {
+      position: sticky;
+      top: 1.5rem;
+      align-self: start;
+      grid-row: 1 / -1;
+      max-height: calc(100dvh - 3rem);
+      overflow-y: auto;
+      padding: .875rem 0;
+    }
+    .toc-title {
+      margin-bottom: .6rem;
+      padding-bottom: .6rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      font: 700 .6875rem/1 var(--font-mono);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .toc a {
+      display: block;
+      margin: .12rem 0;
+      padding: .42rem .65rem;
+      border-left: 2px solid transparent;
+      border-radius: 0 .35rem .35rem 0;
+      color: var(--text-dim);
+      font-size: .8125rem;
+      text-decoration: none;
+    }
+    .toc a:hover, .toc a:focus-visible { color: var(--text); background: var(--surface-2); }
+    .toc a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); }
+
+    header {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(1.5rem, 4vw, 3rem);
+      border: 1px solid var(--border-strong);
+      background: var(--surface-elevated);
+      box-shadow: var(--shadow);
+    }
+    header::after {
+      content: "";
+      position: absolute;
+      width: 13rem;
+      height: 13rem;
+      right: -4rem;
+      bottom: -6rem;
+      border: 2rem solid var(--accent-soft);
+      border-radius: 50%;
+      opacity: .8;
+    }
+    .eyebrow, .label, code, .file {
+      font-family: var(--font-mono);
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-size: .75rem;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 16ch;
+      margin: .45rem 0 .65rem;
+      font-size: clamp(2.25rem, 6vw, 4.5rem);
+      line-height: .98;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+    .lead {
+      position: relative;
+      z-index: 1;
+      max-width: 62ch;
+      margin: 0;
+      color: var(--text-dim);
+      font-size: 1.0625rem;
+    }
+    .facts {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      margin-top: 1.35rem;
+    }
+    .fact {
+      padding: .32rem .65rem;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      font: .75rem/1.4 var(--font-mono);
+    }
+
+    section { margin-top: 3.5rem; }
+    .sec-head {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: .8rem;
+      align-items: center;
+      margin: 0 0 1rem;
+      scroll-margin-top: 1.5rem;
+    }
+    .sec-index {
+      color: var(--accent);
+      font: 700 .75rem/1 var(--font-mono);
+      letter-spacing: .08em;
+    }
+    h2 {
+      margin: 0;
+      font-size: 1.5rem;
+      line-height: 1.2;
+      text-wrap: balance;
+    }
+    .section-note {
+      max-width: 70ch;
+      margin: -.35rem 0 1.2rem 2.55rem;
+      color: var(--text-dim);
+    }
+
+    .flow-card, .ve-card, .thread-card, .file-card, details {
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .flow-card { padding: clamp(1rem, 2vw, 1.5rem); box-shadow: var(--shadow); }
+    figure { margin: 0; }
+    figcaption {
+      margin-top: .9rem;
+      color: var(--text-dim);
+      font-size: .8125rem;
+    }
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(11, auto);
+      align-items: stretch;
+      gap: .45rem;
+      overflow-x: auto;
+      padding: .25rem 0 .75rem;
+    }
+    .step {
+      min-width: 7.7rem;
+      padding: .9rem;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+    .step.primary { border-top: 3px solid var(--accent); }
+    .step.detect { border-top: 3px solid var(--green); }
+    .step.action { border-top: 3px solid var(--amber); }
+    .label {
+      margin-bottom: .35rem;
+      color: var(--text-dim);
+      font-size: .6875rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .step strong { display: block; font-size: .9375rem; line-height: 1.25; }
+    .step small { display: block; margin-top: .38rem; color: var(--text-dim); font-size: .75rem; line-height: 1.45; }
+    .arrow {
+      align-self: center;
+      color: var(--border-strong);
+      font: 700 1rem/1 var(--font-mono);
+    }
+
+    .branch-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(15rem, .55fr);
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    .logic {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: .7rem;
+    }
+    .logic .ve-card { padding: 1rem; border-left: 3px solid var(--green); }
+    .logic .ve-card:nth-child(3), .logic .ve-card:nth-child(4) { border-left-color: var(--amber); }
+    .ve-card h3, .thread-card h3, .file-card h3 { margin: 0 0 .35rem; font-size: .95rem; }
+    .ve-card p, .thread-card p, .file-card p { margin: 0; color: var(--text-dim); font-size: .8125rem; }
+    code {
+      padding: .08rem .3rem;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--accent);
+      font-size: .75rem;
+      white-space: normal;
+    }
+    .guardrail { padding: 1.1rem; border: 1px solid var(--red); background: var(--red-soft); }
+    .guardrail strong { color: var(--red); }
+    .guardrail ul, .compact-list { margin: .55rem 0 0; padding-left: 1.3rem; }
+    .guardrail li, .compact-list li { margin-top: .35rem; }
+
+    .background-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .background-flow .ve-card { border: 0; border-right: 1px solid var(--border); padding: 1.1rem; }
+    .background-flow .ve-card:last-child { border-right: 0; }
+    .background-flow .ve-card:nth-child(2) { background: var(--green-soft); }
+    .background-flow .ve-card:nth-child(3) { background: var(--amber-soft); }
+    .big-num { color: var(--border-strong); font: 700 1.75rem/1 var(--font-mono); }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(18rem, .75fr);
+      gap: 1rem;
+    }
+    .threads { display: grid; gap: .65rem; }
+    .thread-card {
+      display: grid;
+      grid-template-columns: 9rem minmax(0, 1fr);
+      gap: 1rem;
+      padding: 1rem;
+      border-left: 4px solid var(--accent);
+    }
+    .thread-card.worker { border-left-color: var(--green); }
+    .thread-card.action { border-left-color: var(--amber); }
+    .thread-name { font: 700 .75rem/1.4 var(--font-mono); color: var(--text-dim); }
+    .queue {
+      padding: 1.1rem;
+      border: 1px dashed var(--accent);
+      background: var(--accent-soft);
+    }
+    .queue h3 { margin: 0 0 .5rem; font-size: .95rem; }
+
+    .file-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: .75rem;
+    }
+    .file-card { padding: 1rem; }
+    .file {
+      display: inline-block;
+      margin-bottom: .55rem;
+      color: var(--accent);
+      font-size: .8125rem;
+      font-weight: 700;
+    }
+    .file-card.core { border-top: 3px solid var(--accent); }
+    .file-card.vision { border-top: 3px solid var(--green); }
+    .file-card.io { border-top: 3px solid var(--amber); }
+
+    details { margin-top: .8rem; }
+    summary {
+      padding: .9rem 1rem;
+      cursor: pointer;
+      color: var(--text);
+      font: 700 .8125rem/1.4 var(--font-mono);
+    }
+    details > div { padding: 0 1rem 1rem; border-top: 1px solid var(--border); }
+    .legend { display: flex; flex-wrap: wrap; gap: .7rem 1.2rem; margin-top: 1rem; color: var(--text-dim); font-size: .75rem; }
+    .legend span::before { content: ""; display: inline-block; width: .62rem; height: .62rem; margin-right: .4rem; background: var(--legend); }
+
+    footer {
+      margin-top: 3.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-dim);
+      font: .75rem/1.6 var(--font-mono);
+    }
+
+    a:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+    @media (max-width: 1000px) {
+      body { padding: 0 1.25rem 2rem; }
+      .wrap { grid-template-columns: 1fr; }
+      .toc {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        grid-row: auto;
+        display: flex;
+        gap: .2rem;
+        max-height: none;
+        margin: 0 -1.25rem;
+        padding: .6rem 1.25rem;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--bg) 92%, transparent);
+        backdrop-filter: blur(10px);
+      }
+      .toc-title { display: none; }
+      .toc a { flex: 0 0 auto; border-left: 0; border-bottom: 2px solid transparent; border-radius: .3rem .3rem 0 0; white-space: nowrap; }
+      .toc a.active { border-left: 0; border-bottom-color: var(--accent); }
+      header { margin-top: 1.25rem; }
+      .sec-head { scroll-margin-top: 4rem; }
+      .branch-grid, .split { grid-template-columns: 1fr; }
+      .file-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 680px) {
+      html { font-size: 16px; }
+      .logic, .file-grid { grid-template-columns: 1fr; }
+      .background-flow { grid-template-columns: 1fr; }
+      .background-flow .ve-card { border-right: 0; border-bottom: 1px solid var(--border); }
+      .thread-card { grid-template-columns: 1fr; gap: .35rem; }
+      .section-note { margin-left: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="toc" id="toc" aria-label="頁面章節">
+      <div class="toc-title">架構索引</div>
+      <a class="active" href="#overview">總覽</a>
+      <a href="#active">主動偵測</a>
+      <a href="#background">背景記帳</a>
+      <a href="#threads">執行緒邊界</a>
+      <a href="#files">模組地圖</a>
+    </nav>
+
+    <main class="main">
+      <header id="overview">
+        <div class="eyebrow">Windows Desktop Automation · Python 3.12+</div>
+        <h1>Pixel Trigger 專案架構</h1>
+        <p class="lead">一個由 Tkinter 控制的本機視覺自動化工具：設定檔把「看見什麼」與「要做什麼」組成 Combo，偵測引擎在背景執行圖片、OCR 與色帶判定，再把安全可取消的輸入動作送回 Windows。</p>
+        <div class="facts" aria-label="架構摘要">
+          <span class="fact">啟動點 main.py</span>
+          <span class="fact">UI 主執行緒</span>
+          <span class="fact">偵測 worker</span>
+          <span class="fact">本機 JSON / PNG / CSV</span>
+          <span class="fact">離線 Tesseract</span>
+        </div>
+      </header>
+
+      <section aria-labelledby="active">
+        <div class="sec-head" id="active"><span class="sec-index">01</span><h2>主動偵測：從畫面到輸入動作</h2></div>
+        <p class="section-note">核心路徑集中在 <code>HookEngine</code>：每一輪只擷取一次畫面，所有啟用的 Combo 共用該 frame，慢規則則交給各自的 worker，避免彼此阻塞。</p>
+        <figure class="flow-card" role="img" aria-label="主動偵測從使用者啟動、擷取畫面、逐一判定 Combo，到執行輸入動作並回報介面的流程">
+          <div class="pipeline">
+            <div class="step primary"><div class="label">使用者</div><strong>F6 / 啟動按鈕</strong><small>GUI 驗證目前 Profile</small></div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="step primary"><div class="label">HookEngine</div><strong>啟動掃描執行緒</strong><small>載入模板、檢查 OCR 與視窗</small></div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="step detect"><div class="label">ScreenCapture</div><strong>每輪擷取一次</strong><small>全螢幕、指定區域或視窗內容區</small></div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="step detect"><div class="label">Combo worker</div><strong>圖片 / OCR 判定</strong><small>模板比對，可加文字二次驗證</small></div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="step action"><div class="label">觸發狀態</div><strong>出現 / 持續可見</strong><small>首次出現一次，或條件成立期間持續</small></div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="step action"><div class="label">input_controller</div><strong>滑鼠、鍵盤、音效</strong><small>延遲、連點、長按皆可取消</small></div>
+          </div>
+          <figcaption>一個 frame 服務多個 Combo；輸入動作在條件消失、目標視窗失效或使用者停止時中斷。</figcaption>
+        </figure>
+
+        <div class="branch-grid">
+          <div class="logic">
+            <article class="ve-card"><h3>純 OCR</h3><p>沒有圖片時，直接對擷取畫面做文字比對。</p></article>
+            <article class="ve-card"><h3>圖片 + OCR</h3><p>先定位圖片，再只對命中區域做文字驗證。</p></article>
+            <article class="ve-card"><h3>位置控制</h3><p>追蹤色標位置，持續調節按鍵或滑鼠動作。</p></article>
+            <article class="ve-card"><h3>色帶控制</h3><p>依色帶狀態與遲滯閾值切換持續動作。</p></article>
+          </div>
+          <aside class="guardrail">
+            <strong>失效即停，不退回全螢幕</strong>
+            <ul class="compact-list">
+              <li>視窗關閉、最小化或 PID 改變時停止。</li>
+              <li>滑鼠按鍵各自有鎖，避免多個 Combo 同時搶用。</li>
+              <li><code>stop_event</code> 貫穿掃描、等待與輸入動作。</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section aria-labelledby="background">
+        <div class="sec-head" id="background"><span class="sec-index">02</span><h2>背景記帳：獨立的餘額辨識管線</h2></div>
+        <p class="section-note"><code>BackgroundCalc</code> 與主動偵測並行但目的不同：它每秒讀取指定 Combo 的餘額，經重複確認後交給 <code>Ledger</code> 寫入每日 CSV。</p>
+        <figure class="background-flow" role="img" aria-label="背景記帳從定位圖示、辨識數字、確認結果到寫入 CSV 與產生統計的四步流程">
+          <article class="ve-card"><div class="big-num">01</div><h3>定位帳面</h3><p>先以無數字的模板圖片找到餘額區域。</p></article>
+          <article class="ve-card"><div class="big-num">02</div><h3>讀取數字</h3><p>優先使用內建數字模板，必要時交給 Tesseract。</p></article>
+          <article class="ve-card"><div class="big-num">03</div><h3>抗誤判確認</h3><p>高信心讀值確認 2 次；低信心使用 Combo 設定的次數。</p></article>
+          <article class="ve-card"><div class="big-num">04</div><h3>記錄與告警</h3><p>寫入 <code>calc/YYYYMMDD.csv</code>，計算收入、支出、淨額與每日上限。</p></article>
+        </figure>
+        <div class="legend" aria-label="顏色圖例">
+          <span style="--legend:var(--accent)">協調與介面</span>
+          <span style="--legend:var(--green)">視覺辨識</span>
+          <span style="--legend:var(--amber)">動作與持久化</span>
+          <span style="--legend:var(--red)">停止與安全邊界</span>
+        </div>
+      </section>
+
+      <section aria-labelledby="threads">
+        <div class="sec-head" id="threads"><span class="sec-index">03</span><h2>執行緒邊界：Tkinter 只留在主執行緒</h2></div>
+        <p class="section-note">UI、主動掃描、Combo 判定、持續動作與背景記帳各有清楚邊界；worker 不直接碰 Tkinter，而是回傳輕量訊息。</p>
+        <div class="split">
+          <div class="threads">
+            <article class="thread-card"><div class="thread-name">MAIN THREAD</div><div><h3>App / Tkinter</h3><p>處理按鈕、編輯器、全域熱鍵註冊、日誌與 Debug Overlay。</p></div></article>
+            <article class="thread-card worker"><div class="thread-name">SCAN THREAD</div><div><h3>HookEngine 掃描迴圈</h3><p>共享 frame、維護上一輪可見狀態，將 Combo 丟進 <code>ThreadPoolExecutor</code>。</p></div></article>
+            <article class="thread-card worker"><div class="thread-name">COMBO WORKERS</div><div><h3>圖片 / OCR 判定</h3><p>每個 Combo 同時最多處理一張最新畫面；慢規則不堆積舊 frame。</p></div></article>
+            <article class="thread-card action"><div class="thread-name">ACTION THREADS</div><div><h3>持續輸入與位置控制</h3><p>條件消失時由專屬事件停止；一次性動作則直接受引擎停止事件控制。</p></div></article>
+            <article class="thread-card action"><div class="thread-name">BACKGROUND</div><div><h3>BackgroundCalc</h3><p>每秒擷取、辨識並更新 Ledger，與主動偵測分開啟停。</p></div></article>
+          </div>
+          <aside class="queue">
+            <h3>回到 UI 的訊息橋</h3>
+            <p>回呼把 <code>triggered</code>、<code>cycle</code>、<code>status</code>、背景讀值與錯誤放入 <code>collections.deque</code>。</p>
+            <p>主執行緒每 <code>150 ms</code> 由 <code>root.after()</code> 清空佇列並更新元件。</p>
+          </aside>
+        </div>
+      </section>
+
+      <section aria-labelledby="files">
+        <div class="sec-head" id="files"><span class="sec-index">04</span><h2>模組地圖：平坦結構，各檔案一個責任</h2></div>
+        <p class="section-note">專案刻意維持平坦模組；資料模型是共同語言，GUI 負責協調，視覺與輸入則分開封裝。</p>
+        <div class="file-grid">
+          <article class="file-card core"><span class="file">main.py</span><h3>程序入口</h3><p>建立 App、註冊熱鍵、進入 Tk 主迴圈。</p></article>
+          <article class="file-card core"><span class="file">gui.py</span><h3>介面與協調器</h3><p>Profile / Combo 編輯、生命週期、訊息佇列與 Debug Overlay。</p></article>
+          <article class="file-card core"><span class="file">automation.py</span><h3>主動偵測引擎</h3><p>掃描排程、觸發狀態、動作執行與取消。</p></article>
+          <article class="file-card vision"><span class="file">screen_capture.py</span><h3>視覺能力</h3><p>Pillow ImageGrab 擷取、OpenCV 模板比對、色標 / 色帶與 Tesseract OCR。</p></article>
+          <article class="file-card io"><span class="file">input_controller.py</span><h3>輸入輸出</h3><p>透過 PyAutoGUI 發送滑鼠、鍵盤與系統音效。</p></article>
+          <article class="file-card core"><span class="file">models.py</span><h3>領域資料</h3><p><code>Profile</code>、<code>Combo</code>、<code>Action</code> 與 Enum 的序列化規則。</p></article>
+          <article class="file-card io"><span class="file">profile_manager.py</span><h3>設定持久化</h3><p>將 Profile 讀寫為 <code>profiles/*.json</code>，管理模板目錄。</p></article>
+          <article class="file-card io"><span class="file">calc.py</span><h3>背景記帳</h3><p>餘額辨識協調、每日會計日與 CSV Ledger。</p></article>
+          <article class="file-card io"><span class="file">window_target.py</span><h3>Windows 視窗</h3><p>以 ctypes 列舉視窗，解析有效的 client-area 螢幕座標。</p></article>
+        </div>
+
+        <details>
+          <summary>展開：本機資料與建置產物</summary>
+          <div>
+            <ul class="compact-list">
+              <li><code>profiles/*.json</code>：使用者自動化設定；不進版控。</li>
+              <li><code>templates/</code>：觸發與點擊目標圖片；不進版控。</li>
+              <li><code>calc/*.csv</code>：按日期分檔的餘額異動紀錄。</li>
+              <li><code>vendor/tesseract/</code>：由 <code>prepare_tesseract.py</code> 產生的離線 OCR runtime。</li>
+              <li><code>dist/pixel_trigger.exe</code>：由 <code>build.py</code> 建立的 Nuitka 單檔 Windows 執行檔。</li>
+              <li><code>test_*.py</code>：標準函式庫 <code>unittest</code> 的回歸測試。</li>
+            </ul>
+          </div>
+        </details>
+      </section>
+
+      <footer>依 2026-09-30 工作區原始碼整理 · 主要依賴：Tkinter / ttkbootstrap / OpenCV / Pillow / PyAutoGUI / Tesseract</footer>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const toc = document.getElementById('toc');
+      const links = [...toc.querySelectorAll('a')];
+      const sections = links.map(link => ({ link, el: document.querySelector(link.hash) })).filter(item => item.el);
+      const observer = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          links.forEach(link => link.classList.remove('active'));
+          const match = sections.find(item => item.el === entry.target);
+          if (match) {
+            match.link.classList.add('active');
+            if (window.innerWidth <= 1000) match.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+          }
+        }
+      }, { rootMargin: '-10% 0px -80% 0px' });
+      sections.forEach(item => observer.observe(item.el));
+      links.forEach(link => link.addEventListener('click', event => {
+        event.preventDefault();
+        const target = document.querySelector(link.hash);
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        try { history.replaceState(null, '', link.hash); } catch (_) { /* file:// */ }
+      }));
+    })();
+  </script>
+</body>
+</html>
