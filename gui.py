@@ -104,12 +104,26 @@ def _system_theme():
         return "litera"
 
 
+def _initial_window_geometry(
+        screen_width: int, screen_height: int) -> tuple[int, int, int, int]:
+    """Return a centered initial size that fits the current display."""
+    max_width = max(1, int(screen_width * 0.94))
+    max_height = max(1, int(screen_height * 0.86))
+    width = min(1200, max_width, max(900, int(screen_width * 0.75)))
+    height = min(900, max_height, max(700, int(screen_height * 0.82)))
+    x = max(0, (screen_width - width) // 2)
+    y = max(0, (screen_height - height) // 2)
+    return width, height, x, y
+
+
 class App:
     def __init__(self):
         self.root = ttk.Window(themename=_system_theme())
         self._theme_manual = False
         self.root.title("PixelTrigger")
-        self.root.geometry("900x800")
+        width, height, x, y = _initial_window_geometry(
+            self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
         self.root.resizable(True, True)
         self.root.attributes("-topmost", True)
 

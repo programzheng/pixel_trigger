@@ -8,7 +8,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from PIL import Image
 
-from gui import App, ComboEditor, DebugOverlay, _system_theme
+from gui import App, ComboEditor, DebugOverlay, _initial_window_geometry, _system_theme
 from models import Action, ActionType, Combo, PositionControl, Profile, TriggerMode
 
 
@@ -28,6 +28,15 @@ class ComboScaleDisplayTest(unittest.TestCase):
                 self.assertEqual(_system_theme(), expected)
             read.side_effect = FileNotFoundError()
             self.assertEqual(_system_theme(), "litera")
+
+    def test_initial_window_geometry_scales_and_stays_on_screen(self):
+        self.assertEqual(_initial_window_geometry(1920, 1080), (1200, 885, 360, 97))
+        self.assertEqual(_initial_window_geometry(1280, 720), (960, 619, 160, 50))
+
+        width, height, x, y = _initial_window_geometry(800, 600)
+        self.assertEqual((width, height, x, y), (752, 516, 24, 42))
+        self.assertLessEqual(width + x, 800)
+        self.assertLessEqual(height + y, 600)
 
     def test_global_hotkeys_queue_events_on_key_press(self):
         with patch.object(App, "_load_initial_profile"):
