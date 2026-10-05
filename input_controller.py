@@ -37,6 +37,17 @@ def mouse_click(button: str = "left", delay_min: float = 0, delay_max: float = 0
     pyautogui.click(button=button)
 
 
+def mouse_click_at(x: int, y: int, button: str = "left", stop_event=None):
+    """Click a screen position long enough for frame-polled applications to see it."""
+    if stop_event and stop_event.is_set():
+        return
+    pyautogui.mouseDown(x=x, y=y, button=button)
+    try:
+        _interruptible_sleep(0.05, stop_event)
+    finally:
+        release_mouse(button)
+
+
 def mouse_rapid_click(
     button: str = "left",
     duration: float = 1.0,

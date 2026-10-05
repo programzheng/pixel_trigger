@@ -437,7 +437,7 @@ class HookEngine:
         if (not found or pos is None or stop_event.is_set() or self._stop_event.is_set()
                 or self._scan_region() != region):
             return
-        input_controller.pyautogui.click(x=pos[0], y=pos[1], button=action.mouse_button.value)
+        input_controller.mouse_click_at(pos[0], pos[1], action.mouse_button.value, stop_event)
 
     def _start_continuous_action(self, combo: Combo):
         stop_evt = threading.Event()
