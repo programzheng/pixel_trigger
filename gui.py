@@ -23,6 +23,7 @@ import ttkbootstrap as ttk
 import numpy as np
 from PIL import Image, ImageGrab, ImageTk
 
+from app_settings import load_app_settings, save_app_settings
 import profile_manager
 from window_target import capture_region, list_windows
 from automation import HookEngine
@@ -116,16 +117,48 @@ def _initial_window_geometry(
     return width, height, x, y
 
 
+def _saved_window_geometry(
+        settings: dict, screen_width: int, screen_height: int
+        ) -> tuple[int, int, int, int, bool]:
+    fallback = _initial_window_geometry(screen_width, screen_height)
+    window = settings.get("window") if isinstance(settings, dict) else None
+    if not isinstance(window, dict):
+        return (*fallback, False)
+
+    values = [window.get(key) for key in ("width", "height", "x", "y")]
+    if any(type(value) is not int for value in values):
+        return (*fallback, False)
+
+    max_width = max(1, int(screen_width * 0.94))
+    max_height = max(1, int(screen_height * 0.86))
+    width = min(max_width, max(min(700, max_width), values[0]))
+    height = min(max_height, max(min(500, max_height), values[1]))
+    x, y = values[2:]
+    if x + 80 < 0 or x > screen_width - 80 or y + 40 < 0 or y > screen_height - 40:
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+    else:
+        x = min(max(0, x), screen_width - width)
+        y = min(max(0, y), screen_height - height)
+    return width, height, x, y, window.get("maximized") is True
+
+
 class App:
     def __init__(self):
         self.root = ttk.Window(themename=_system_theme())
         self._theme_manual = False
         self.root.title("PixelTrigger")
-        width, height, x, y = _initial_window_geometry(
-            self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        width, height, x, y, maximized = _saved_window_geometry(
+            load_app_settings(), self.root.winfo_screenwidth(),
+            self.root.winfo_screenheight())
         self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self._normal_geometry = (width, height, x, y)
+        self._window_save_job = None
         self.root.resizable(True, True)
         self.root.attributes("-topmost", True)
+        self.root.bind("<Configure>", self._remember_window_geometry, add="+")
+        if maximized:
+            self.root.after_idle(lambda: self.root.state("zoomed"))
 
         self.profile: Profile = Profile()
         self._file_logger = _create_log_logger()
@@ -1238,8 +1271,46 @@ class App:
             for handler in self._file_logger.handlers:
                 handler.close()
 
+    def _remember_window_geometry(self, event=None):
+        if event is not None and event.widget != self.root:
+            return
+        state = self.root.state()
+        if state == "normal":
+            self._normal_geometry = (
+                self.root.winfo_width(), self.root.winfo_height(),
+                self.root.winfo_x(), self.root.winfo_y())
+        if event is not None and state in ("normal", "zoomed"):
+            if self._window_save_job is not None:
+                self.root.after_cancel(self._window_save_job)
+            self._window_save_job = self.root.after(1000, self._save_window_settings_later)
+
+    def _save_window_settings_later(self):
+        self._window_save_job = None
+        try:
+            self._save_window_settings()
+        except OSError as error:
+            self._file_logger.warning("Unable to save app settings: %s", error)
+
+    def _save_window_settings(self):
+        state = self.root.state()
+        if state == "withdrawn":
+            return
+        if state == "normal":
+            self._remember_window_geometry()
+        width, height, x, y = self._normal_geometry
+        save_app_settings({"window": {
+            "width": width,
+            "height": height,
+            "x": x,
+            "y": y,
+            "maximized": state == "zoomed",
+        }})
+
     def on_close(self):
         self._closing = True
+        if self._window_save_job is not None:
+            self.root.after_cancel(self._window_save_job)
+            self._window_save_job = None
         self._unregister_hotkeys()
         self.btn_toggle.config(state="disabled")
         self.btn_background.config(state="disabled")
@@ -1247,6 +1318,10 @@ class App:
         if self.background.busy:
             self.root.after(100, self.on_close)
             return
+        try:
+            self._save_window_settings()
+        except OSError as error:
+            self._file_logger.warning("Unable to save app settings: %s", error)
         for job in self.root.tk.call("after", "info"):
             self.root.after_cancel(job)
         self.root.destroy()
