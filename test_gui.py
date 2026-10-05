@@ -8,7 +8,14 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from PIL import Image
 
-from gui import App, ComboEditor, DebugOverlay, _initial_window_geometry, _system_theme
+from gui import (
+    App,
+    ComboEditor,
+    DebugOverlay,
+    _initial_window_geometry,
+    _saved_window_geometry,
+    _system_theme,
+)
 from models import Action, ActionType, Combo, PositionControl, Profile, TriggerMode
 
 
@@ -37,6 +44,48 @@ class ComboScaleDisplayTest(unittest.TestCase):
         self.assertEqual((width, height, x, y), (752, 516, 24, 42))
         self.assertLessEqual(width + x, 800)
         self.assertLessEqual(height + y, 600)
+
+    def test_saved_window_geometry_restores_or_falls_back_safely(self):
+        settings = {"window": {
+            "width": 1000, "height": 700, "x": 120, "y": 80,
+            "maximized": True,
+        }}
+        self.assertEqual(
+            _saved_window_geometry(settings, 1920, 1080),
+            (1000, 700, 120, 80, True),
+        )
+
+        settings["window"].update(width=3000, height=2000, x=4000, y=3000)
+        self.assertEqual(
+            _saved_window_geometry(settings, 1280, 720),
+            (1203, 619, 38, 50, True),
+        )
+        self.assertEqual(
+            _saved_window_geometry({"window": {"width": "bad"}}, 1280, 720),
+            (*_initial_window_geometry(1280, 720), False),
+        )
+
+    def test_window_changes_save_after_a_quiet_second(self):
+        with patch.object(App, "_load_initial_profile"), \
+                patch("gui.save_app_settings") as save:
+            app = App()
+            try:
+                app.root.update()
+                app.root.geometry("900x700+100+100")
+                app.root.update()
+                app.root.geometry("950x720+120+110")
+                app.root.update()
+                save.assert_not_called()
+                app.root.after(1100, app.root.quit)
+                app.root.mainloop()
+                save.assert_called_once()
+                window = save.call_args.args[0]["window"]
+                self.assertEqual(
+                    (window["width"], window["height"], window["x"], window["y"]),
+                    (950, 720, 120, 110),
+                )
+            finally:
+                app.on_close()
 
     def test_global_hotkeys_queue_events_on_key_press(self):
         with patch.object(App, "_load_initial_profile"):
