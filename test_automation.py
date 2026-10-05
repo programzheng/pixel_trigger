@@ -165,9 +165,9 @@ class ResponsiveAutomationTest(unittest.TestCase):
         frame = np.zeros((300, 400))
         with patch.object(engine._capture, "grab_frame", return_value=frame), \
                 patch.object(engine._capture, "match_template", return_value=(True, 0.95, (250, 350))) as match, \
-                patch.object(input_controller.pyautogui, "click") as click:
+                patch.object(input_controller, "mouse_click_at") as click:
             engine._execute_action_once(combo)
-            click.assert_called_once_with(x=250, y=350, button="left")
+            click.assert_called_once_with(250, 350, "left", engine._stop_event)
             self.assertEqual(match.call_args.args[1:4], ("target.png", 0.9, profile.scan_region))
             click.reset_mock()
             match.return_value = (False, 0.2, (250, 350))
@@ -183,6 +183,16 @@ class ResponsiveAutomationTest(unittest.TestCase):
             with patch.object(engine, "_click_target_image", side_effect=lambda *args: stopped.set()) as target:
                 engine._continuous_action_loop(combo, stopped)
                 target.assert_called_once_with(combo, stopped)
+
+    def test_click_at_holds_then_releases_even_when_cancelled(self):
+        stopped = threading.Event()
+        with patch.object(input_controller.pyautogui, "mouseDown") as down, \
+                patch.object(input_controller, "release_mouse") as release, \
+                patch.object(input_controller, "_interruptible_sleep", side_effect=lambda _, event: event.set()) as wait:
+            input_controller.mouse_click_at(250, 350, "left", stopped)
+        down.assert_called_once_with(x=250, y=350, button="left")
+        wait.assert_called_once_with(0.05, stopped)
+        release.assert_called_once_with("left")
 
     def test_slow_combo_does_not_block_fast_combo_or_duplicate_work(self):
         slow = Combo(image_path="slow.png")
