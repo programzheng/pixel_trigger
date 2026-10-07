@@ -211,7 +211,13 @@ class HookEngine:
             if enabled_combos and not ready_combos:
                 self._interruptible_sleep(profile.scan_interval)
                 continue
+            capture_started = time.perf_counter()
             frame = self._capture.grab_frame(region)
+            capture_ms = (time.perf_counter() - capture_started) * 1000
+            if capture_ms >= 50:
+                for combo in ready_combos:
+                    self._log(combo, "截圖耗時", f"{capture_ms:.0f} ms",
+                              category="capture_timing")
             if frame is None:
                 for combo in enabled_combos:
                     self._log(combo, "截圖失敗", level="failure")
@@ -291,6 +297,7 @@ class HookEngine:
             reason = "OCR 通過" if text_ok else "OCR 未通過"
         else:
             # ── 圖片比對模式 ──
+            match_started = time.perf_counter()
             previous_rect = (self._visible_rects.get(combo.id)
                              if combo.trigger == TriggerMode.WHILE_VISIBLE and not combo.verify_text
                              else None)
@@ -307,6 +314,11 @@ class HookEngine:
                     frame, combo.image_path, combo.match_threshold, region,
                     scale_limit=1, stop_event=self._stop_event,
                 )
+            match_ms = (time.perf_counter() - match_started) * 1000
+            if match_ms >= 50:
+                mode = "上次位置" if previous_rect is not None else "全畫面"
+                self._log(combo, "圖片比對耗時", f"{match_ms:.0f} ms，{mode}",
+                          category="match_timing")
             reason = "圖片通過" if found else "圖片定位未通過"
 
             # 文字驗證（圖片匹配成功 + 有設定 verify_text 時才執行 OCR）
@@ -443,6 +455,7 @@ class HookEngine:
             yield True
             return
         lock = self._mouse_locks[combo.action.mouse_button.value]
+        wait_started = time.perf_counter()
         while not stop_event.is_set() and not self._stop_event.is_set():
             if lock.acquire(timeout=0.05):
                 break
@@ -450,6 +463,10 @@ class HookEngine:
             yield False
             return
         try:
+            wait_ms = (time.perf_counter() - wait_started) * 1000
+            if wait_ms >= 50:
+                self._log(combo, "滑鼠等待耗時", f"{wait_ms:.0f} ms",
+                          category="mouse_timing")
             yield not stop_event.is_set() and not self._stop_event.is_set()
         finally:
             lock.release()
@@ -659,8 +676,13 @@ class HookEngine:
                 region = self._scan_region()
                 if self._stop_event.is_set():
                     break
+                position_started = time.perf_counter()
                 frame, screen_region = self._capture.position_frame(
                     combo, self._stop_event, scan_region=region)
+                position_ms = (time.perf_counter() - position_started) * 1000
+                if position_ms >= 50:
+                    self._log(combo, "定位與截圖耗時", f"{position_ms:.0f} ms",
+                              category="position_timing")
                 marker = find_color_marker(frame, settings)
                 score = self._capture.get_position_confidence()
                 detail = f"定位分數={score:.6f}／閾值={combo.match_threshold:.6f}"
@@ -674,7 +696,10 @@ class HookEngine:
                 if combo.trigger == TriggerMode.COLOR_BAND:
                     detected, ratio = color_band_state(frame, marker, settings, active)
                     should_run = detected
-                    if ratio is None:
+                    if frame is None:
+                        missing_since = None
+                        should_run = False
+                    elif ratio is None:
                         now = time.monotonic()
                         if missing_since is None:
                             missing_since = now
