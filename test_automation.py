@@ -286,6 +286,24 @@ class ResponsiveAutomationTest(unittest.TestCase):
                 self.assertTrue(acquired)
         self.assertTrue(any("滑鼠等待耗時 75 ms" in message for message in logs))
 
+    def test_continuous_click_delay_does_not_hold_mouse_lock(self):
+        combo = Combo(trigger=TriggerMode.WHILE_VISIBLE,
+                      action=Action(action_type=ActionType.CLICK,
+                                    delay_min=2, delay_max=2))
+        engine = HookEngine()
+        stopped = threading.Event()
+
+        def during_delay(seconds, event):
+            self.assertEqual(seconds, 2)
+            self.assertTrue(engine._mouse_locks["left"].acquire(blocking=False))
+            engine._mouse_locks["left"].release()
+            event.set()
+
+        with patch.object(engine, "_interruptible_sleep_event", side_effect=during_delay), \
+                patch.object(input_controller, "mouse_click") as click:
+            engine._continuous_action_loop(combo, stopped)
+        click.assert_not_called()
+
     def test_action_does_not_hold_detection_on_old_frame(self):
         combo = Combo(image_path="trigger.png", trigger=TriggerMode.ON_APPEAR)
         entered, release = threading.Event(), threading.Event()
