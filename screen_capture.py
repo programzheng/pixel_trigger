@@ -418,6 +418,27 @@ class ScreenCapture:
 
         return False, best_conf, None
 
+    def confirm_template_at(self, frame, image_path, rect, threshold, region=None):
+        """Confirm a matched template at its screen position on a fresh frame."""
+        template, tw, th, mask = self._cache[image_path]
+        x, y, w, h = rect
+        if region:
+            x -= region[0]
+            y -= region[1]
+        margin = max(4, round(max(w, h) * 0.1))
+        x1, y1 = max(0, x - margin), max(0, y - margin)
+        roi = frame[y1:min(frame.shape[0], y + h + margin),
+                    x1:min(frame.shape[1], x + w + margin)]
+        if roi.shape[0] < h or roi.shape[1] < w:
+            return False
+        scaled = cv2.resize(template, (w, h), interpolation=(
+            cv2.INTER_AREA if w < tw else cv2.INTER_LINEAR))
+        scaled_mask = (cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                       if mask is not None else None)
+        confidence, _ = _best_template_match(roi, scaled, scaled_mask)
+        return confidence >= threshold
+
+
     def position_frame(self, combo: Combo, stop_event=None, *, scan_region=None):
         """用完整觸發圖片定位，再將框選區域換算為箭頭追蹤區塊。"""
         self._match_state.position_confidence = 0.0

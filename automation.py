@@ -38,6 +38,8 @@ class HookEngine:
         # combo_id → while_visible 動作 thread
         self._active_actions: dict[str, threading.Thread] = {}
         self._action_stop_events: dict[str, threading.Event] = {}
+        self._once_actions: dict[str, threading.Thread] = {}
+        self._once_action_stop_events: dict[str, threading.Event] = {}
         self._mouse_locks = {button: threading.Lock() for button in ("left", "right", "middle")}
 
         self.cycle_count = 0
@@ -138,6 +140,8 @@ class HookEngine:
         self._stop_event.set()
         for evt in list(self._action_stop_events.values()):
             evt.set()
+        for evt in list(self._once_action_stop_events.values()):
+            evt.set()
         for t in list(self._active_actions.values()):
             t.join(timeout=2)
         self._active_actions.clear()
@@ -168,10 +172,16 @@ class HookEngine:
                     self._log(combo, "偵測已停止", category="lifecycle")
             for evt in list(self._action_stop_events.values()):
                 evt.set()
+            for evt in list(self._once_action_stop_events.values()):
+                evt.set()
             for thread in list(self._active_actions.values()):
+                thread.join(timeout=2)
+            for thread in list(self._once_actions.values()):
                 thread.join(timeout=2)
             self._active_actions.clear()
             self._action_stop_events.clear()
+            self._once_actions.clear()
+            self._once_action_stop_events.clear()
             self._running = False
             if self._on_status_change:
                 self._on_status_change(False)
@@ -197,6 +207,13 @@ class HookEngine:
             if frame is None:
                 for combo in enabled_combos:
                     self._log(combo, "截圖失敗", level="failure")
+                    self._prev_visible[combo.id] = False
+                    if combo.trigger == TriggerMode.WHILE_VISIBLE and combo.id in self._active_actions:
+                        self._stop_continuous_action(combo.id)
+                    if combo.trigger == TriggerMode.ON_APPEAR and combo.id in self._once_action_stop_events:
+                        self._once_action_stop_events[combo.id].set()
+                    if self._on_debug_info:
+                        self._on_debug_info(combo.id, False, 0.0, None)
                 self._interruptible_sleep(0.5)
                 continue
 
@@ -334,12 +351,18 @@ class HookEngine:
             print(f"[{datetime.now():%Y%m%d %H:%M:%S}][detect] '{combo.name}' 消失了 confidence={confidence:.6f}")
 
         if combo.trigger == TriggerMode.ON_APPEAR:
-            if found and not was_visible:
-                self._notify_triggered(combo.id, True)
-                try:
-                    self._execute_action_once(combo)
-                finally:
-                    self._notify_triggered(combo.id, False)
+            if not found and combo.id in self._once_action_stop_events:
+                self._once_action_stop_events[combo.id].set()
+            elif found and not was_visible:
+                if combo.id not in self._once_actions:
+                    stop_event = threading.Event()
+                    thread = threading.Thread(target=self._run_action_once,
+                                              args=(combo, stop_event, match_rect), daemon=True)
+                    self._once_action_stop_events[combo.id] = stop_event
+                    self._once_actions[combo.id] = thread
+                    thread.start()
+                else:
+                    self._prev_visible[combo.id] = False
 
         elif combo.trigger == TriggerMode.WHILE_VISIBLE:
             if found:
@@ -349,11 +372,44 @@ class HookEngine:
                 if combo.id in self._active_actions:
                     self._stop_continuous_action(combo.id)
 
-    def _execute_action_once(self, combo: Combo):
+    def _execute_action_once(self, combo: Combo, stop_event=None):
         """執行一次性動作（on_appear 用）"""
-        with self._mouse_action(combo, self._stop_event) as acquired:
+        stop_event = self._stop_event if stop_event is None else stop_event
+        with self._mouse_action(combo, stop_event) as acquired:
             if acquired:
-                self._execute_action_once_unlocked(combo)
+                self._execute_action_once_unlocked(combo, stop_event)
+
+    def _run_action_once(self, combo: Combo, stop_event: threading.Event, match_rect):
+        self._notify_triggered(combo.id, True)
+        try:
+            if combo.action.action_type == ActionType.CLICK and match_rect is not None:
+                delay = random.uniform(combo.action.delay_min, combo.action.delay_max)
+                if stop_event.wait(delay) or self._stop_event.is_set():
+                    return
+                with self._mouse_action(combo, stop_event) as acquired:
+                    if not acquired:
+                        return
+                    region = self._scan_region()
+                    if self._stop_event.is_set():
+                        return
+                    frame = self._capture.grab_frame(region)
+                    if frame is None or self._scan_region() != region or not self._capture.confirm_template_at(
+                            frame, combo.image_path, match_rect, combo.match_threshold, region):
+                        self._log(combo, "點擊前圖片已消失，取消動作", category="action")
+                        if self._on_debug_info:
+                            self._on_debug_info(combo.id, False, 0.0, None)
+                        return
+                    self._execute_action_once_unlocked(combo, stop_event, click_delay=0)
+            else:
+                self._execute_action_once(combo, stop_event)
+        except Exception as e:
+            self._log(combo, "偵測／動作錯誤", str(e), category="error", level="error")
+            self._stop_event.set()
+        finally:
+            self._notify_triggered(combo.id, False)
+            if self._once_actions.get(combo.id) is threading.current_thread():
+                self._once_actions.pop(combo.id, None)
+                self._once_action_stop_events.pop(combo.id, None)
 
     @contextmanager
     def _mouse_action(self, combo: Combo, stop_event: threading.Event):
@@ -373,7 +429,7 @@ class HookEngine:
         finally:
             lock.release()
 
-    def _execute_action_once_unlocked(self, combo: Combo, stop_event=None):
+    def _execute_action_once_unlocked(self, combo: Combo, stop_event=None, click_delay=None):
         stop_event = self._stop_event if stop_event is None else stop_event
         action = combo.action
         at = action.action_type
@@ -382,7 +438,10 @@ class HookEngine:
 
         if at == ActionType.CLICK:
             input_controller.mouse_click(
-                action.mouse_button.value, action.delay_min, action.delay_max, stop_event
+                action.mouse_button.value,
+                action.delay_min if click_delay is None else click_delay,
+                action.delay_max if click_delay is None else click_delay,
+                stop_event,
             )
         elif at == ActionType.CLICK_IMAGE:
             self._click_target_image(combo, stop_event)
