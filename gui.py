@@ -1224,17 +1224,14 @@ class App:
                             if self.tree.exists(combo.id):
                                 self.tree.set(combo.id, "status", msg[1])
                             if combo.id in self._background_debug_data:
-                                data = self._background_debug_data[combo.id]
-                                self._background_debug_data[combo.id] = (False, 0.0, data[2], False, 0.0, data[5])
+                                self._background_debug_data[combo.id] = (False, 0.0, None, False, 0.0, None)
                 if not self.background.running:
                     self._background_debug_data.clear()
             elif kind == "background_debug":
                 cid = msg[1]
-                previous = self._background_debug_data.get(cid, (False, 0.0, None, False, 0.0, None))
                 found, conf, icon_rect, number_found, number_conf, number_rect = msg[2:]
                 self._background_debug_data[cid] = (
-                    found, conf, icon_rect or previous[2], number_found, number_conf,
-                    number_rect or previous[5],
+                    found, conf, icon_rect, number_found, number_conf, number_rect,
                 )
             elif kind in ("background_read", "background_record"):
                 _, cid, message = msg

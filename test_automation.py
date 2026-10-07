@@ -1,6 +1,6 @@
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -225,6 +225,104 @@ class ResponsiveAutomationTest(unittest.TestCase):
                 engine.stop()
         self.assertFalse(engine.running)
         self.assertIsNone(engine._thread)
+
+    def test_action_does_not_hold_detection_on_old_frame(self):
+        combo = Combo(image_path="trigger.png", trigger=TriggerMode.ON_APPEAR)
+        entered, release = threading.Event(), threading.Event()
+        debug = []
+        engine = HookEngine(on_debug_info=lambda *args: debug.append(args[1]))
+        engine.set_profile(Profile(combos=[combo]))
+
+        def action(_combo, _stop_event):
+            entered.set()
+            release.wait(2)
+
+        with patch.object(engine._capture, "match_template", side_effect=[
+                (True, 0.9, (10, 10)), (False, 0.1, None), (True, 0.9, (10, 10))]), \
+                patch.object(engine, "_execute_action_once", side_effect=action) as execute:
+            try:
+                engine._process_combo(combo, np.zeros((20, 20)), None)
+                self.assertTrue(entered.wait(1))
+                engine._process_combo(combo, np.zeros((20, 20)), None)
+                engine._process_combo(combo, np.zeros((20, 20)), None)
+                self.assertEqual(debug, [True, False, True])
+                execute.assert_called_once()
+                self.assertEqual(execute.call_args.args[0], combo)
+            finally:
+                release.set()
+                for thread in list(engine._once_actions.values()):
+                    thread.join(2)
+
+    def test_failed_capture_clears_visible_action_and_debug(self):
+        combo = Combo(image_path="trigger.png", trigger=TriggerMode.WHILE_VISIBLE)
+        debug = []
+        engine = HookEngine(on_debug_info=lambda *args: debug.append(args))
+        engine.set_profile(Profile(combos=[combo]))
+        engine._prev_visible[combo.id] = True
+        action_stop = threading.Event()
+        engine._action_stop_events[combo.id] = action_stop
+        engine._active_actions[combo.id] = Mock()
+
+        with patch.object(engine._capture, "grab_frame", return_value=None), \
+                patch.object(engine, "_interruptible_sleep", side_effect=lambda _: engine._stop_event.set()):
+            engine._scan_frames(None, {})
+
+        self.assertTrue(action_stop.is_set())
+        self.assertFalse(engine._prev_visible[combo.id])
+        self.assertEqual(debug, [(combo.id, False, 0.0, None)])
+
+    def test_disappearing_image_cancels_delayed_click(self):
+        combo = Combo(image_path="trigger.png", trigger=TriggerMode.ON_APPEAR,
+                      action=Action(action_type=ActionType.CLICK,
+                                    delay_min=1.0, delay_max=2.0))
+        entered = threading.Event()
+        engine = HookEngine(on_combo_triggered=lambda _id, active: entered.set() if active else None)
+        engine.set_profile(Profile(combos=[combo]))
+
+        with patch.object(engine._capture, "match_template", side_effect=[
+                (True, 0.99, (10, 10)), (False, 0.1, None)]), \
+                patch.object(engine._capture, "get_match_size", return_value=(8, 8)), \
+                patch.object(engine._capture, "grab_frame") as grab, \
+                patch("automation.random.uniform", return_value=2), \
+                patch.object(input_controller.pyautogui, "click") as click:
+            engine._process_combo(combo, np.zeros((20, 20)), None)
+            self.assertTrue(entered.wait(1))
+            thread = engine._once_actions[combo.id]
+            engine._process_combo(combo, np.zeros((20, 20)), None)
+            thread.join(1)
+            self.assertFalse(thread.is_alive())
+            grab.assert_not_called()
+            click.assert_not_called()
+
+    def test_delayed_click_rechecks_current_image_before_sending_input(self):
+        combo = Combo(image_path="trigger.png", trigger=TriggerMode.ON_APPEAR,
+                      action=Action(action_type=ActionType.CLICK,
+                                    delay_min=1.0, delay_max=2.0))
+        for visible in (False, True):
+            with self.subTest(visible=visible):
+                debug = []
+                engine = HookEngine(on_debug_info=lambda *args: debug.append(args[1]))
+                engine.set_profile(Profile(combos=[combo]))
+                with patch.object(engine._capture, "match_template",
+                                  return_value=(True, 0.99, (10, 10))), \
+                        patch.object(engine._capture, "get_match_size", return_value=(8, 8)), \
+                        patch.object(engine._capture, "grab_frame",
+                                     return_value=np.zeros((20, 20))), \
+                        patch.object(engine._capture, "confirm_template_at",
+                                     return_value=visible) as confirm, \
+                        patch("automation.random.uniform", return_value=0), \
+                        patch.object(input_controller, "mouse_click") as click:
+                    engine._process_combo(combo, np.zeros((20, 20)), None)
+                    thread = engine._once_actions.get(combo.id)
+                    if thread:
+                        thread.join(1)
+                    confirm.assert_called_once()
+                    if visible:
+                        click.assert_called_once()
+                        self.assertEqual(click.call_args.args[:3], ("left", 0, 0))
+                    else:
+                        click.assert_not_called()
+                        self.assertEqual(debug, [True, False])
 
     def test_delayed_input_is_cancelled_and_held_input_is_released(self):
         for action, method in ((input_controller.mouse_click, "click"),
