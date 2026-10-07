@@ -113,7 +113,9 @@ class ResponsiveAutomationTest(unittest.TestCase):
                 with patch("automation.color_band_state", side_effect=[(True, 1), (False, None),
                         (False, None), (False, None), (True, 1), (False, 0)]), \
                         patch("automation.find_color_marker", return_value=None), \
-                        patch.object(engine._capture, "position_frame", return_value=(None, None)), \
+                        patch.object(engine._capture, "position_frame",
+                                     return_value=(np.zeros((60, 60, 3), dtype=np.uint8),
+                                                   (0, 0, 60, 60))), \
                         patch("automation.time.monotonic", side_effect=clock), \
                         patch("automation.threading.Thread", side_effect=new_thread), \
                         patch.object(engine, "_interruptible_sleep_event", side_effect=tick):
@@ -127,6 +129,32 @@ class ResponsiveAutomationTest(unittest.TestCase):
             settings.band_missing_ms = invalid
             with self.assertRaises(ValueError):
                 settings.validate()
+
+    def test_color_band_stops_when_position_image_disappears(self):
+        settings = PositionControl(region=(0, 0, 60, 60), band_missing_ms=10000)
+        combo = Combo(trigger=TriggerMode.COLOR_BAND, position_control=settings)
+        engine = HookEngine()
+        engine.set_profile(Profile(combos=[combo]))
+        stopped = threading.Event()
+        action_stops = []
+
+        def new_thread(*args, **kwargs):
+            action_stops.append(kwargs["args"][1])
+            return Mock()
+
+        def tick(*args):
+            if len(action_stops) and action_stops[0].is_set():
+                stopped.set()
+
+        frame = np.zeros((60, 60, 3), dtype=np.uint8)
+        with patch.object(engine._capture, "position_frame", side_effect=[
+                (frame, (0, 0, 60, 60)), (None, None)]), \
+                patch("automation.find_color_marker", return_value=None), \
+                patch("automation.color_band_state", side_effect=[(True, 1), (False, None)]), \
+                patch("automation.threading.Thread", side_effect=new_thread), \
+                patch.object(engine, "_interruptible_sleep_event", side_effect=tick):
+            engine._position_control_loop(combo, stopped)
+        self.assertTrue(action_stops[0].is_set())
 
     def test_marker_modes_support_every_action_and_cancel(self):
         for trigger in (TriggerMode.POSITION_CONTROL, TriggerMode.COLOR_BAND):
@@ -237,6 +265,26 @@ class ResponsiveAutomationTest(unittest.TestCase):
                              side_effect=lambda _: engine._stop_event.set()):
             engine._scan_frames(None, {combo.id: busy})
         grab.assert_not_called()
+
+    def test_slow_match_reports_duration_in_combo_log(self):
+        combo = Combo(image_path="trigger.png")
+        logs = []
+        engine = HookEngine(on_log=lambda _id, message, _level: logs.append(message))
+        engine.set_profile(Profile(combos=[combo]))
+        with patch.object(engine._capture, "match_template", return_value=(False, 0.2, None)), \
+                patch("automation.time.perf_counter", side_effect=[0.0, 0.075]):
+            engine._process_combo(combo, np.zeros((20, 20)), None)
+        self.assertTrue(any("圖片比對耗時 75 ms，全畫面" in message for message in logs))
+
+    def test_mouse_lock_wait_reports_duration_in_combo_log(self):
+        combo = Combo()
+        logs = []
+        engine = HookEngine(on_log=lambda _id, message, _level: logs.append(message))
+        engine.set_profile(Profile(combos=[combo]))
+        with patch("automation.time.perf_counter", side_effect=[0.0, 0.075]):
+            with engine._mouse_action(combo, threading.Event()) as acquired:
+                self.assertTrue(acquired)
+        self.assertTrue(any("滑鼠等待耗時 75 ms" in message for message in logs))
 
     def test_action_does_not_hold_detection_on_old_frame(self):
         combo = Combo(image_path="trigger.png", trigger=TriggerMode.ON_APPEAR)
