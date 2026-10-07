@@ -226,6 +226,18 @@ class ResponsiveAutomationTest(unittest.TestCase):
         self.assertFalse(engine.running)
         self.assertIsNone(engine._thread)
 
+    def test_busy_combo_does_not_waste_full_screen_captures(self):
+        combo = Combo(image_path="slow.png")
+        engine = HookEngine()
+        engine.set_profile(Profile(combos=[combo]))
+        busy = Mock()
+        busy.done.return_value = False
+        with patch.object(engine._capture, "grab_frame") as grab, \
+                patch.object(engine, "_interruptible_sleep",
+                             side_effect=lambda _: engine._stop_event.set()):
+            engine._scan_frames(None, {combo.id: busy})
+        grab.assert_not_called()
+
     def test_action_does_not_hold_detection_on_old_frame(self):
         combo = Combo(image_path="trigger.png", trigger=TriggerMode.ON_APPEAR)
         entered, release = threading.Event(), threading.Event()
@@ -308,8 +320,8 @@ class ResponsiveAutomationTest(unittest.TestCase):
                         patch.object(engine._capture, "get_match_size", return_value=(8, 8)), \
                         patch.object(engine._capture, "grab_frame",
                                      return_value=np.zeros((20, 20))), \
-                        patch.object(engine._capture, "confirm_template_at",
-                                     return_value=visible) as confirm, \
+                        patch.object(engine._capture, "score_template_at",
+                                     return_value=0.99 if visible else 0.1) as confirm, \
                         patch("automation.random.uniform", return_value=0), \
                         patch.object(input_controller, "mouse_click") as click:
                     engine._process_combo(combo, np.zeros((20, 20)), None)
@@ -323,6 +335,34 @@ class ResponsiveAutomationTest(unittest.TestCase):
                     else:
                         click.assert_not_called()
                         self.assertEqual(debug, [True, False])
+
+    def test_visible_image_uses_fast_local_check_and_stops_when_gone(self):
+        combo = Combo(image_path="trigger.png", trigger=TriggerMode.WHILE_VISIBLE,
+                      match_threshold=0.99)
+        debug = []
+        engine = HookEngine(on_debug_info=lambda *args: debug.append(args[1]))
+        engine.set_profile(Profile(combos=[combo]))
+
+        def start(_combo):
+            engine._active_actions[combo.id] = Mock()
+
+        def stop(_id):
+            engine._active_actions.pop(combo.id)
+
+        with patch.object(engine._capture, "match_template",
+                          return_value=(True, 0.995, (10, 10))) as search, \
+                patch.object(engine._capture, "get_match_size", return_value=(8, 8)), \
+                patch.object(engine._capture, "score_template_at",
+                             side_effect=[0.994, 0.1]) as local, \
+                patch.object(engine, "_start_continuous_action", side_effect=start), \
+                patch.object(engine, "_stop_continuous_action", side_effect=stop) as cancel:
+            for _ in range(3):
+                engine._process_combo(combo, np.zeros((20, 20)), None)
+
+        search.assert_called_once()
+        self.assertEqual(local.call_count, 2)
+        cancel.assert_called_once_with(combo.id)
+        self.assertEqual(debug, [True, True, False])
 
     def test_delayed_input_is_cancelled_and_held_input_is_released(self):
         for action, method in ((input_controller.mouse_click, "click"),

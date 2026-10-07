@@ -418,8 +418,8 @@ class ScreenCapture:
 
         return False, best_conf, None
 
-    def confirm_template_at(self, frame, image_path, rect, threshold, region=None):
-        """Confirm a matched template at its screen position on a fresh frame."""
+    def score_template_at(self, frame, image_path, rect, region=None):
+        """Score a matched template near its screen position on a fresh frame."""
         template, tw, th, mask = self._cache[image_path]
         x, y, w, h = rect
         if region:
@@ -430,13 +430,13 @@ class ScreenCapture:
         roi = frame[y1:min(frame.shape[0], y + h + margin),
                     x1:min(frame.shape[1], x + w + margin)]
         if roi.shape[0] < h or roi.shape[1] < w:
-            return False
+            return 0.0
         scaled = cv2.resize(template, (w, h), interpolation=(
             cv2.INTER_AREA if w < tw else cv2.INTER_LINEAR))
         scaled_mask = (cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
                        if mask is not None else None)
         confidence, _ = _best_template_match(roi, scaled, scaled_mask)
-        return confidence >= threshold
+        return confidence
 
 
     def position_frame(self, combo: Combo, stop_event=None, *, scan_region=None):
