@@ -1914,8 +1914,8 @@ class ComboEditor:
         self.var_position_release = tk.StringVar(value=f"{settings.release_at * 100:g}")
         self.var_band_color = tk.StringVar(value="#%02x%02x%02x" % settings.band_color)
         self.var_band_tolerance = tk.StringVar(value=str(settings.band_tolerance))
-        self.var_band_start = tk.StringVar(value=f"{settings.band_start * 100:g}")
-        self.var_band_stop = tk.StringVar(value=f"{settings.band_stop * 100:g}")
+        self.var_band_start = tk.StringVar(value=f"{settings.band_start:g}")
+        self.var_band_stop = tk.StringVar(value=f"{settings.band_stop:g}")
         self.var_band_margin = tk.StringVar(value=str(settings.band_margin))
         self.var_band_missing_ms = tk.StringVar(value=str(settings.band_missing_ms))
         self.position_only_rows = []
@@ -1928,8 +1928,8 @@ class ComboEditor:
                            ("停止位置 (%)", self.var_position_release),
                            ("執行色帶 (#RRGGBB)", self.var_band_color),
                            ("色帶色相容差 (0~90)", self.var_band_tolerance),
-                           ("啟動色帶比例 (%)", self.var_band_start),
-                           ("停止色帶比例 (%)", self.var_band_stop),
+                           ("啟動色帶比例 (0~1)", self.var_band_start),
+                           ("停止色帶比例 (0~1)", self.var_band_stop),
                            ("取樣範圍 (箭頭倍數)", self.var_band_margin),
                            ("漏判容忍時間 (ms)", self.var_band_missing_ms)):
             row = ttk.Frame(self.frm_position)
@@ -1997,8 +1997,8 @@ class ComboEditor:
             release_at=self._to_float(self.var_position_release.get()) / 100,
             band_color=tuple(int(band_color[i:i + 2], 16) for i in (1, 3, 5)),
             band_tolerance=int(self.var_band_tolerance.get()),
-            band_start=self._to_float(self.var_band_start.get()) / 100,
-            band_stop=self._to_float(self.var_band_stop.get()) / 100,
+            band_start=self._to_float(self.var_band_start.get()),
+            band_stop=self._to_float(self.var_band_stop.get()),
             band_margin=self._to_float(self.var_band_margin.get()),
             band_missing_ms=int(self.var_band_missing_ms.get()))
         settings.validate()
@@ -2074,7 +2074,7 @@ class ComboEditor:
                 active, ratio = color_band_state(frame, marker, settings)
                 continues, _ = color_band_state(frame, marker, settings, active=True)
                 text = ("箭頭或色帶取樣不足：停止" if ratio is None else
-                        f"執行色帶比例：{ratio:.1%}\n"
+                        f"執行色帶比例：{ratio:.3f}\n"
                         f"原本未執行：{'啟動' if active else '維持停止'}\n"
                         f"原本執行中：{'繼續執行' if continues else '停止'}")
                 text += "\n預覽僅測設定圖片，不執行動作。"

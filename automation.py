@@ -610,7 +610,7 @@ class HookEngine:
                         reason = ("色帶達啟動比例" if not active and detected else
                                   "色帶未達啟動比例" if not active else
                                   "色帶維持執行" if detected else "色帶達停止比例")
-                        detail += f" 色帶={ratio:.1%}／啟動={settings.band_start:.1%}／停止={settings.band_stop:.1%}"
+                        detail += f" 色帶={ratio:.3f}／啟動={settings.band_start:.3f}／停止={settings.band_stop:.3f}"
                 elif position is None or position >= settings.release_at:
                     should_run = False
                 elif position <= settings.press_at:

@@ -145,7 +145,7 @@ class PositionControl:
         if type(self.band_tolerance) is not int or not 0 <= self.band_tolerance <= 90:
             raise ValueError("色帶容差必須介於 0~90。")
         if not 0 <= self.band_stop < self.band_start <= 1:
-            raise ValueError("色帶比例必須符合：0 ≤ 停止比例 < 啟動比例 ≤ 100%。")
+            raise ValueError("色帶比例必須符合：0 ≤ 停止比例 < 啟動比例 ≤ 1。")
         if not math.isfinite(self.band_margin) or not 0.1 <= self.band_margin <= 3:
             raise ValueError("取樣範圍必須介於箭頭大小的 0.1~3 倍。")
         if type(self.band_missing_ms) is not int or self.band_missing_ms < 0:
