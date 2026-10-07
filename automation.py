@@ -625,6 +625,11 @@ class HookEngine:
             return
 
         while not stop_event.is_set() and not self._stop_event.is_set():
+            if at == ActionType.CLICK:
+                self._interruptible_sleep_event(
+                    random.uniform(action.delay_min, action.delay_max), stop_event)
+                if stop_event.is_set() or self._stop_event.is_set():
+                    break
             with self._mouse_action(combo, stop_event) as acquired:
                 if not acquired:
                     break
@@ -638,7 +643,7 @@ class HookEngine:
         at = action.action_type
         if at == ActionType.CLICK:
             input_controller.mouse_click(
-                action.mouse_button.value, action.delay_min, action.delay_max, stop_event
+                action.mouse_button.value, 0, 0, stop_event
             )
         elif at == ActionType.CLICK_IMAGE:
             self._click_target_image(combo, stop_event)

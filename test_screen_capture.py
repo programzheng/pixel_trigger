@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from screen_capture import MATCH_SCALES, ScreenCapture, _run_tesseract
+from screen_capture import MATCH_SCALES, ScreenCapture, _best_template_match, _run_tesseract
 from automation import HookEngine
 from models import Combo, Profile
 
@@ -149,6 +149,29 @@ class MultiScaleMatchTest(unittest.TestCase):
                         self.assertGreaterEqual(confidence, 0.95)
                         self.assertEqual(pos, (x + w // 2, y + h // 2))
                         self.assertEqual(capture.get_match_size(path), (w, h))
+
+    def test_small_masked_icon_uses_coarse_search_on_first_match(self):
+        image = np.zeros((85, 40, 4), dtype=np.uint8)
+        image[:, :, :3] = np.random.default_rng(41).integers(
+            30, 230, (85, 40, 1), dtype=np.uint8)
+        image[8:77, 8:32, 3] = 255
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "icon.png")
+            cv2.imwrite(path, image)
+            capture = ScreenCapture()
+            capture.load_template(path)
+            template, w, h, mask = capture._cache[path]
+            frame = np.random.default_rng(42).integers(
+                30, 230, (768, 1024), dtype=np.uint8)
+            x, y = 475, 285
+            area = frame[y:y + h, x:x + w]
+            area[mask > 0] = template[mask > 0]
+            with patch("screen_capture._best_template_match", wraps=_best_template_match) as search:
+                found, score, center = capture.match_template(frame, path, 0.99, scale_limit=1)
+            self.assertTrue(found)
+            self.assertGreaterEqual(score, 0.99)
+            self.assertEqual(center, (x + w // 2, y + h // 2))
+            self.assertLess(search.call_args_list[0].args[0].shape[1], frame.shape[1])
 
     def test_first_cycle_reports_progress(self):
         engine = HookEngine()

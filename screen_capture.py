@@ -347,7 +347,7 @@ class ScreenCapture:
                                     for i in range(max(0, min(scale_limit, len(fallback_scales)))))
             self._scale_offsets[image_path] = (offset + len(fallback_scales)) % (len(MATCH_SCALES) - 1)
         search_frame = None
-        search_ratio = min(1.0, 960 / max(fw, fh))
+        search_ratio = min(1.0, 512 / max(fw, fh))
         scales = () if best_conf >= 0.999 else (preferred_scale, 1.0) + fallback_scales
         for scale in scales:
             if stop_event is not None and stop_event.is_set():
@@ -368,8 +368,7 @@ class ScreenCapture:
                 if np.std(scaled) == 0:
                     continue
             # 小圖維持原圖搜尋，避免縮圖後失去細節。
-            if (search_ratio < 1.0 and min(w, h) * search_ratio >= 16
-                    and scale not in (preferred_scale, 1.0)):
+            if search_ratio < 1.0 and min(w, h) * search_ratio >= 16:
                 if search_frame is None:
                     search_frame = cv2.resize(frame, None, fx=search_ratio, fy=search_ratio,
                                               interpolation=cv2.INTER_AREA)
