@@ -40,6 +40,7 @@ class HookEngine:
         self._action_stop_events: dict[str, threading.Event] = {}
         self._once_actions: dict[str, threading.Thread] = {}
         self._once_action_stop_events: dict[str, threading.Event] = {}
+        self._visible_rects: dict[str, tuple[int, int, int, int]] = {}
         self._mouse_locks = {button: threading.Lock() for button in ("left", "right", "middle")}
 
         self.cycle_count = 0
@@ -70,6 +71,7 @@ class HookEngine:
     def set_profile(self, profile: Profile):
         self._profile = profile
         self._prev_visible.clear()
+        self._visible_rects.clear()
 
     def get_match_scale(self, image_path: str) -> float | None:
         return self._capture.get_match_scale(image_path)
@@ -182,6 +184,7 @@ class HookEngine:
             self._action_stop_events.clear()
             self._once_actions.clear()
             self._once_action_stop_events.clear()
+            self._visible_rects.clear()
             self._running = False
             if self._on_status_change:
                 self._on_status_change(False)
@@ -203,11 +206,17 @@ class HookEngine:
             region = self._scan_region()
             if self._stop_event.is_set():
                 break
+            ready_combos = [c for c in enabled_combos
+                            if c.id not in workers or workers[c.id].done()]
+            if enabled_combos and not ready_combos:
+                self._interruptible_sleep(profile.scan_interval)
+                continue
             frame = self._capture.grab_frame(region)
             if frame is None:
                 for combo in enabled_combos:
                     self._log(combo, "截圖失敗", level="failure")
                     self._prev_visible[combo.id] = False
+                    self._visible_rects.pop(combo.id, None)
                     if combo.trigger == TriggerMode.WHILE_VISIBLE and combo.id in self._active_actions:
                         self._stop_continuous_action(combo.id)
                     if combo.trigger == TriggerMode.ON_APPEAR and combo.id in self._once_action_stop_events:
@@ -217,12 +226,10 @@ class HookEngine:
                 self._interruptible_sleep(0.5)
                 continue
 
-            for combo in enabled_combos:
+            for combo in ready_combos:
                 if self._stop_event.is_set():
                     break
                 worker = workers.get(combo.id)
-                if worker is not None and not worker.done():
-                    continue
                 if worker is not None:
                     try:
                         worker.result()
@@ -284,10 +291,22 @@ class HookEngine:
             reason = "OCR 通過" if text_ok else "OCR 未通過"
         else:
             # ── 圖片比對模式 ──
-            found, confidence, pos = self._capture.match_template(
-                frame, combo.image_path, combo.match_threshold, region,
-                scale_limit=1, stop_event=self._stop_event,
-            )
+            previous_rect = (self._visible_rects.get(combo.id)
+                             if combo.trigger == TriggerMode.WHILE_VISIBLE and not combo.verify_text
+                             else None)
+            if previous_rect is not None:
+                confidence = self._capture.score_template_at(
+                    frame, combo.image_path, previous_rect, region)
+                found = confidence >= combo.match_threshold
+                pos = (previous_rect[0] + previous_rect[2] // 2,
+                       previous_rect[1] + previous_rect[3] // 2) if found else None
+                if found:
+                    match_rect = previous_rect
+            else:
+                found, confidence, pos = self._capture.match_template(
+                    frame, combo.image_path, combo.match_threshold, region,
+                    scale_limit=1, stop_event=self._stop_event,
+                )
             reason = "圖片通過" if found else "圖片定位未通過"
 
             # 文字驗證（圖片匹配成功 + 有設定 verify_text 時才執行 OCR）
@@ -317,7 +336,7 @@ class HookEngine:
                     reason = "圖片與 OCR 通過" if text_ok else "圖片通過但 OCR 未通過"
 
             # 計算螢幕絕對座標框線（供 debug overlay 使用）
-            if pos and combo.image_path:
+            if pos and combo.image_path and match_rect is None:
                 size = self._capture.get_match_size(combo.image_path)
                 if size:
                     tw, th = size
@@ -330,6 +349,11 @@ class HookEngine:
         if self._profile and self._profile.window_title and self._scan_region() != region:
             return
         self._prev_visible[combo.id] = found
+        if combo.trigger == TriggerMode.WHILE_VISIBLE:
+            if found and match_rect is not None:
+                self._visible_rects[combo.id] = match_rect
+            else:
+                self._visible_rects.pop(combo.id, None)
         detail = f"圖片分數={confidence:.6f}／閾值={combo.match_threshold:.6f}" if combo.image_path else ""
         if combo.verify_text:
             detail += f" OCR分數={text_conf:.3f}／閾值={combo.text_threshold:.3f} 文字模式={combo.text_match_mode.value}"
@@ -393,8 +417,9 @@ class HookEngine:
                     if self._stop_event.is_set():
                         return
                     frame = self._capture.grab_frame(region)
-                    if frame is None or self._scan_region() != region or not self._capture.confirm_template_at(
-                            frame, combo.image_path, match_rect, combo.match_threshold, region):
+                    if (frame is None or self._scan_region() != region
+                            or self._capture.score_template_at(
+                                frame, combo.image_path, match_rect, region) < combo.match_threshold):
                         self._log(combo, "點擊前圖片已消失，取消動作", category="action")
                         if self._on_debug_info:
                             self._on_debug_info(combo.id, False, 0.0, None)

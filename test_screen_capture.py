@@ -13,7 +13,7 @@ from models import Combo, Profile
 
 
 class MultiScaleMatchTest(unittest.TestCase):
-    def test_confirm_template_at_uses_current_frame(self):
+    def test_score_template_at_uses_current_frame(self):
         template = np.random.default_rng(23).integers(30, 230, (12, 14), dtype=np.uint8)
         capture = ScreenCapture()
         capture._cache["icon"] = (template, 14, 12, None)
@@ -21,9 +21,9 @@ class MultiScaleMatchTest(unittest.TestCase):
         frame[10:22, 20:34] = template
         rect = (120, 210, 14, 12)
         region = (100, 200, 50, 40)
-        self.assertTrue(capture.confirm_template_at(frame, "icon", rect, 0.98, region))
+        self.assertGreaterEqual(capture.score_template_at(frame, "icon", rect, region), 0.98)
         frame[10:22, 20:34] = 0
-        self.assertFalse(capture.confirm_template_at(frame, "icon", rect, 0.98, region))
+        self.assertLess(capture.score_template_at(frame, "icon", rect, region), 0.98)
 
     def test_tesseract_tsv_confidence_is_normalized(self):
         output = (b"level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
@@ -253,7 +253,7 @@ class MultiScaleMatchTest(unittest.TestCase):
             with patch.object(engine._capture, "ocr_verify",
                               return_value=(True, 1.0, "OK")) as ocr, \
                     patch.object(engine._capture, "grab_frame", return_value=frame), \
-                    patch.object(engine._capture, "confirm_template_at", return_value=True), \
+                    patch.object(engine._capture, "score_template_at", return_value=0.99), \
                     patch("automation.random.uniform", return_value=0), \
                     patch.object(engine, "_execute_action_once_unlocked") as action:
                 for _ in range(len(MATCH_SCALES)):
