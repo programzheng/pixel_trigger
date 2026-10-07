@@ -47,7 +47,7 @@ TRIGGER_LABELS = {
     TriggerMode.ON_APPEAR: "出現時觸發一次",
     TriggerMode.WHILE_VISIBLE: "可見期間持續執行",
     TriggerMode.POSITION_CONTROL: "位置控制",
-    TriggerMode.COLOR_BAND: "色帶判斷（實驗）",
+    TriggerMode.COLOR_BAND: "色帶判斷",
 }
 
 ACTION_LABELS = {
