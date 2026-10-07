@@ -94,10 +94,10 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
     return None
 
 
-def color_band_state(frame, marker, settings: PositionControl, active=False):
-    """排除箭頭後讀取附近色帶；回傳條件是否成立與有效像素中的指定色比例。"""
+def color_band_samples(frame, marker, settings: PositionControl):
+    """回傳取樣左上角、有效像素與符合色帶的像素；取樣不足時回傳 None。"""
     if frame is None or marker is None:
-        return False, None
+        return None
     x, y, w, h = marker[1]
     margin = max(3, round(max(w, h) * settings.band_margin))
     x1, y1 = max(0, x - margin), max(0, y - margin)
@@ -111,10 +111,20 @@ def color_band_state(frame, marker, settings: PositionControl, active=False):
     if roi.shape[2] == 4:
         valid &= roi[:, :, 3] > 0
     if np.count_nonzero(valid) < max(8, round(w * h * 0.05)):
-        return False, None
+        return None
     target = cv2.cvtColor(np.uint8([[settings.band_color]]), cv2.COLOR_RGB2HSV)[0, 0]
-    delta = np.abs(hsv[:, :, 0][valid] - int(target[0]))
-    ratio = float(np.mean(np.minimum(delta, 180 - delta) <= settings.band_tolerance))
+    delta = np.abs(hsv[:, :, 0] - int(target[0]))
+    matched = valid & (np.minimum(delta, 180 - delta) <= settings.band_tolerance)
+    return x1, y1, valid, matched
+
+
+def color_band_state(frame, marker, settings: PositionControl, active=False):
+    """排除箭頭後讀取附近色帶；回傳條件是否成立與有效像素中的指定色比例。"""
+    samples = color_band_samples(frame, marker, settings)
+    if samples is None:
+        return False, None
+    _, _, valid, matched = samples
+    ratio = float(np.count_nonzero(matched) / np.count_nonzero(valid))
     return (ratio > settings.band_stop if active else ratio >= settings.band_start), ratio
 
 

@@ -29,7 +29,7 @@ from window_target import capture_region, list_windows
 from automation import HookEngine
 from calc import BackgroundCalc, accounting_day, validate_combo
 from screen_capture import ScreenCapture
-from screen_capture import find_color_marker, color_band_state, ocr_from_screen
+from screen_capture import find_color_marker, color_band_samples, ocr_from_screen
 from models import (
     Action,
     ActionType,
@@ -2053,16 +2053,28 @@ class ComboEditor:
             scale = min(340 / w, 170 / h)
             width, height = max(1, round(w * scale)), max(1, round(h * scale))
             self._position_preview_size = (width, height)
-            self._position_photo = ImageTk.PhotoImage(Image.fromarray(frame).resize((width, height)))
+            band_mode = self.var_trigger.get() == TriggerMode.COLOR_BAND.value
+            marker = find_color_marker(frame, settings)
+            samples = color_band_samples(frame, marker, settings) if band_mode else None
+            preview = frame.copy()
+            if samples is not None:
+                x1, y1, valid, matched = samples
+                roi = preview[y1:y1 + valid.shape[0], x1:x1 + valid.shape[1], :3]
+                for mask, color in ((valid & ~matched, (255, 165, 0)),
+                                    (matched, (0, 255, 80))):
+                    roi[mask] = (roi[mask].astype(np.uint16) + color) // 2
+            self._position_photo = ImageTk.PhotoImage(Image.fromarray(preview).resize((width, height)))
             canvas = self.position_canvas
             canvas.delete("all")
             canvas.create_image(0, 0, image=self._position_photo, anchor="nw")
-            band_mode = self.var_trigger.get() == TriggerMode.COLOR_BAND.value
+            if samples is not None:
+                x2, y2 = x1 + valid.shape[1], y1 + valid.shape[0]
+                canvas.create_rectangle(x1 * scale, y1 * scale, x2 * scale, y2 * scale,
+                                        outline="cyan", width=2)
             for fraction, color in (() if band_mode else
                                     ((settings.press_at, "#00ff88"), (settings.release_at, "#ff5555"))):
                 x = fraction * (width - 1)
                 canvas.create_line(x, 0, x, height, fill=color, width=2)
-            marker = find_color_marker(frame, settings)
             if marker:
                 (cx, cy), _ = marker
                 px, py = cx * scale, cy * scale
@@ -2071,12 +2083,16 @@ class ComboEditor:
             else:
                 self.lbl_position_status.config(text="未找到唯一標記：調整顏色／容差／區域。此時會停止動作。")
             if band_mode:
-                active, ratio = color_band_state(frame, marker, settings)
-                continues, _ = color_band_state(frame, marker, settings, active=True)
-                text = ("箭頭或色帶取樣不足：停止" if ratio is None else
-                        f"執行色帶比例：{ratio:.3f}\n"
-                        f"原本未執行：{'啟動' if active else '維持停止'}\n"
-                        f"原本執行中：{'繼續執行' if continues else '停止'}")
+                if marker is None:
+                    text = "未找到唯一箭頭：檢查標記顏色、容差與偵測區域。"
+                elif samples is None:
+                    text = "有效色帶取樣不足：檢查取樣範圍與圖片。"
+                else:
+                    ratio = float(np.count_nonzero(matched) / np.count_nonzero(valid))
+                    text = (f"執行色帶比例：{ratio:.3f}\n"
+                            f"原本未執行：{'啟動' if ratio >= settings.band_start else '維持停止'}\n"
+                            f"原本執行中：{'繼續執行' if ratio > settings.band_stop else '停止'}")
+                    text += "\n青框：取樣範圍；綠色：符合色帶；橘色：其他有效像素。"
                 text += "\n預覽僅測設定圖片，不執行動作。"
                 self.lbl_position_status.config(text=text)
         except (ValueError, TypeError, OSError) as e:

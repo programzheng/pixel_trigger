@@ -247,6 +247,7 @@ class ComboScaleDisplayTest(unittest.TestCase):
                 path = Path(folder) / "gauge.png"
                 image = Image.new("RGB", (60, 60), (115, 170, 75))
                 image.paste((255, 170, 41), (25, 25, 35, 35))
+                image.paste((230, 50, 40), (20, 20, 22, 25))
                 image.save(path)
                 combo = Combo(image_path=str(path), trigger=TriggerMode.COLOR_BAND,
                               position_control=PositionControl(region=(0, 0, 60, 60),
@@ -254,10 +255,23 @@ class ComboScaleDisplayTest(unittest.TestCase):
                 with patch.object(tk.Toplevel, "wait_window"):
                     editor = ComboEditor(root, combo)
                 try:
+                    self.assertEqual(len(editor.position_canvas.find_all()), 3)  # 圖片、取樣框、箭頭
                     editor.var_band_tolerance.set("0")
                     self.assertIn("原本執行中：停止", editor.lbl_position_status.cget("text"))
+                    no_match = editor.win.tk.call(str(editor._position_photo), "get", 108, 62)
                     editor.var_band_tolerance.set("30")
                     self.assertIn("原本未執行：啟動", editor.lbl_position_status.cget("text"))
+                    matched = editor.win.tk.call(str(editor._position_photo), "get", 108, 62)
+                    self.assertNotEqual(no_match, matched)
+                    ratio_text = editor.lbl_position_status.cget("text").splitlines()[0]
+                    editor.var_band_start.set("1")
+                    self.assertIn("原本未執行：維持停止", editor.lbl_position_status.cget("text"))
+                    self.assertEqual(editor.lbl_position_status.cget("text").splitlines()[0], ratio_text)
+                    self.assertEqual(editor.win.tk.call(str(editor._position_photo), "get", 108, 62), matched)
+                    editor.var_position_color.set("#0000ff")
+                    self.assertIn("未找到唯一箭頭", editor.lbl_position_status.cget("text"))
+                    self.assertEqual(len(editor.position_canvas.find_all()), 1)
+                    editor.var_position_color.set("#ffaa29")
                     self.assertFalse(any(isinstance(w, tk.Toplevel) for w in editor.win.winfo_children()))
                     editor.var_band_start.set("")
                     self.assertFalse("原本未執行：啟動" in editor.lbl_position_status.cget("text"))

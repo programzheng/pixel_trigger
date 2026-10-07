@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from models import PositionControl
-from screen_capture import find_color_marker, color_band_state
+from screen_capture import find_color_marker, color_band_samples, color_band_state
 
 
 def background_action(frame, marker_rect):
@@ -37,6 +37,19 @@ def gauge_frame(angle, scale=1, brightness=1):
 
 
 class BackgroundColorExperiment(unittest.TestCase):
+    def test_preview_samples_match_runtime_ratio(self):
+        settings = PositionControl(band_margin=1)
+        frame = np.full((40, 40, 3), (115, 170, 75), dtype=np.uint8)
+        frame[:, :20] = (220, 65, 35)
+        marker = ((20, 20), (15, 15, 10, 10))
+        x, y, valid, matched = color_band_samples(frame, marker, settings)
+        _, ratio = color_band_state(frame, marker, settings)
+        self.assertEqual((x, y), (5, 5))
+        self.assertFalse(valid[10:20, 10:20].any())  # 箭頭不參與比例
+        self.assertTrue(matched.any())
+        self.assertTrue((valid & ~matched).any())
+        self.assertEqual(ratio, np.count_nonzero(matched) / np.count_nonzero(valid))
+
     def test_hysteresis_transparency_and_serialization(self):
         from models import Combo, TriggerMode
         settings = PositionControl(band_start=0.8, band_stop=0.6)
