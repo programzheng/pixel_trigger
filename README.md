@@ -26,6 +26,24 @@ configurable mouse, keyboard, and sound actions through a Tkinter interface.
 
 Global hotkeys, window targeting, and input automation depend on Windows APIs.
 
+### Recommended hardware
+
+A recent 4-core CPU with 4 GB of RAM may handle basic detection if enough memory
+remains after Windows and the target application start. For typical use, 8 GB of
+RAM and an SSD are a more comfortable starting point; consider 16 GB if other
+programs use substantial memory. No dedicated GPU is required. These are
+guidance, not measured minimum requirements.
+
+Detection speed depends mainly on CPU load, capture area, the number of enabled
+rules, and OCR use. Scans wait 0.1 seconds by default *after* each capture cycle;
+slow matching or OCR can reduce the effective rate. Select the smallest useful
+capture region before shortening the scan interval. If system memory is exhausted
+and Windows starts swapping, detection can slow down further.
+
+The packaged executable does not require a separate Python installation. Running
+from source requires Python and uv as listed above; text verification also needs
+Tesseract and the `eng` and `chi_tra` language data.
+
 ## Getting Started
 
 ```powershell
