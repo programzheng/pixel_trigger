@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -20,6 +21,8 @@ PROJECT_DIR = Path(__file__).resolve().parent
 TESSERACT_DIR = PROJECT_DIR / "vendor" / "tesseract"
 NOTICES_FILE = PROJECT_DIR / "THIRD_PARTY_NOTICES.txt"
 GENERATED_NOTICES = PROJECT_DIR / "dist" / "THIRD_PARTY_NOTICES.txt"
+with (PROJECT_DIR / "pyproject.toml").open("rb") as project_file:
+    VERSION = tomllib.load(project_file)["project"]["version"]
 NUITKA_REPORT = PROJECT_DIR / "dist" / "nuitka-report.xml"
 FORBIDDEN_MODULES = ("mouseinfo", "easyocr", "bidi", "torch", "torchvision")
 NOTICE_DISTRIBUTIONS = (
@@ -49,10 +52,11 @@ NUITKA_ARGS = [
     "--include-data-dir=profiles=profiles",
     f"--include-data-dir={TESSERACT_DIR}=tesseract",
     f"--include-data-files={GENERATED_NOTICES}=THIRD_PARTY_NOTICES.txt",
+    f"--include-data-files={PROJECT_DIR / 'pyproject.toml'}=pyproject.toml",
     "--include-data-dir=assets=assets",
     # Windows 版本資訊（可選）
     "--windows-product-name=PixelTrigger",
-    "--windows-file-version=0.2.0.0",
+    f"--windows-file-version={VERSION}.0",
     # 進入點
     "main.py",
 ]
@@ -70,6 +74,7 @@ PYINSTALLER_ARGS = [
     *[option for module in FORBIDDEN_MODULES for option in ("--exclude-module", module)],
     f"--add-data={TESSERACT_DIR}:tesseract",
     f"--add-data={GENERATED_NOTICES}:.",
+    f"--add-data={PROJECT_DIR / 'pyproject.toml'}:.",
     f"--add-data={PROJECT_DIR / 'assets'}:assets",
     "main.py",
 ]

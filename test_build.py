@@ -41,6 +41,7 @@ class BuildModeTest(unittest.TestCase):
                 )
                 self.assertIn("--include-package=ttkbootstrap", command)
                 self.assertIn("--include-package-data=ttkbootstrap", command)
+                self.assertIn(f"--include-data-files={script.parent / 'pyproject.toml'}=pyproject.toml", command)
                 target = "dist/standalone/main.dist/pixel_trigger.exe" if standalone else "dist/pixel_trigger.exe"
                 self.assertIn(target, output.getvalue())
                 self.assertIn("耗時", output.getvalue())
@@ -61,6 +62,7 @@ class BuildModeTest(unittest.TestCase):
             runpy.run_path(str(script), run_name="__main__")
         command = run.call_args.args[0]
         self.assertEqual(command[1:3], ["-m", "PyInstaller"])
+        self.assertIn(f"--add-data={script.parent / 'pyproject.toml'}:.", command)
         for option in ("--onedir", "--contents-directory=.", "--collect-all=ttkbootstrap"):
             self.assertIn(option, command)
         self.assertTrue(any("vendor\\tesseract:tesseract" in item for item in command))
