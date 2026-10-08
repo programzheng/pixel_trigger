@@ -12,6 +12,7 @@ from gui import (
     App,
     ComboEditor,
     DebugOverlay,
+    _app_title,
     _initial_window_geometry,
     _saved_window_geometry,
     _system_theme,
@@ -20,6 +21,10 @@ from models import Action, ActionType, Combo, PositionControl, Profile, TriggerM
 
 
 class ComboScaleDisplayTest(unittest.TestCase):
+    def test_app_title_uses_project_version(self):
+        with patch("gui.tomllib.load", return_value={"project": {"version": "1.2.3"}}):
+            self.assertEqual(_app_title(), "PixelTrigger v1.2.3")
+
     def setUp(self):
         # Each test owns a new Tcl interpreter; styles cannot cross roots.
         ttk.Style.instance = None

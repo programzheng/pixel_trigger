@@ -10,6 +10,7 @@ from logging.handlers import TimedRotatingFileHandler
 import time
 import warnings
 import threading
+import tomllib
 import keyboard
 import tkinter as tk
 from datetime import datetime, timedelta
@@ -66,6 +67,12 @@ MOUSE_BTN_LABELS = {
     MouseButton.RIGHT: "右鍵",
     MouseButton.MIDDLE: "中鍵",
 }
+
+
+def _app_title():
+    with Path(__file__).with_name("pyproject.toml").open("rb") as project_file:
+        version = tomllib.load(project_file)["project"]["version"]
+    return f"PixelTrigger v{version}"
 
 
 def _third_party_notices():
@@ -147,7 +154,7 @@ class App:
     def __init__(self):
         self.root = ttk.Window(themename=_system_theme())
         self._theme_manual = False
-        self.root.title("PixelTrigger")
+        self.root.title(_app_title())
         width, height, x, y, maximized = _saved_window_geometry(
             load_app_settings(), self.root.winfo_screenwidth(),
             self.root.winfo_screenheight())
@@ -350,7 +357,7 @@ class App:
             messagebox.showerror("第三方授權", str(error), parent=self.root)
             return
         win = tk.Toplevel(self.root)
-        win.title("Pixel Trigger 0.2.0 — 第三方授權")
+        win.title(f"{self.root.title()} — 第三方授權")
         win.geometry("760x560")
         text = tk.Text(win, wrap="word")
         scroll = ttk.Scrollbar(win, orient="vertical", command=text.yview)
