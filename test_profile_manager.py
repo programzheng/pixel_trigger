@@ -6,6 +6,17 @@ from types import SimpleNamespace
 
 
 class ProfileLocationTest(unittest.TestCase):
+    def test_debug_hotkeys_default_and_round_trip(self):
+        from models import Profile
+
+        profile = Profile.from_dict({"name": "old profile"})
+        self.assertEqual((profile.debug_hotkey, profile.background_debug_hotkey), ("F9", "F10"))
+        profile.debug_hotkey = "ctrl+shift+d"
+        profile.background_debug_hotkey = "ctrl+shift+b"
+        restored = Profile.from_dict(profile.to_dict())
+        self.assertEqual(restored.debug_hotkey, profile.debug_hotkey)
+        self.assertEqual(restored.background_debug_hotkey, profile.background_debug_hotkey)
+
     def test_external_profiles_and_development_path(self):
         script = Path(__file__).resolve().with_name("profile_manager.py")
         development = runpy.run_path(str(script))

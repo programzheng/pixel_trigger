@@ -23,4 +23,6 @@ No automated test suite or coverage threshold currently exists. Before submittin
 
 ## Commit & Pull Request Guidelines
 
+After each completed set of application changes, update `project.version` in `pyproject.toml` once. Increment the patch version for fixes and small adjustments (for example, `0.2.0` to `0.2.1`); increment the minor version and reset the patch for larger features. Keep the project version in `uv.lock` synchronized. Documentation-only changes do not require a version bump. The UI and build must use the version from `pyproject.toml`; do not add timestamps or separate hardcoded versions.
+
 Recent history uses Conventional Commit-style subjects such as `feat: support Nuitka packaging ...`; use a short imperative subject with a fitting prefix (`feat:`, `fix:`, `docs:`). Pull requests should explain the user-visible change, list manual verification steps, and note any profile or asset changes. Include screenshots for UI changes and link the relevant issue when one exists. Do not commit generated build directories, local profiles/templates, OCR runtimes, or virtual environments already covered by `.gitignore`.

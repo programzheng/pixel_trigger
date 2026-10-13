@@ -1,6 +1,7 @@
 """Color-band classification checks."""
 
 import math
+import json
 from pathlib import Path
 import unittest
 
@@ -37,6 +38,91 @@ def gauge_frame(angle, scale=1, brightness=1):
 
 
 class BackgroundColorExperiment(unittest.TestCase):
+    def test_band_roi_is_independent_of_surrounding_scene(self):
+        from screen_capture import ignored_region_mask
+        settings = PositionControl(region=(0, 0, 240, 180), color=(255, 170, 41),
+                                   min_area=20, max_area=500, band_margin=1)
+        angles = np.linspace(200, 340, 30)
+        points = [(120 + radius * math.cos(math.radians(angle)),
+                   150 + radius * math.sin(math.radians(angle)))
+                  for radius, arc in ((114, angles), (86, angles[::-1])) for angle in arc]
+        settings.include_polygon = tuple((x / 239, y / 179) for x, y in points)
+        settings.validate()
+        for angle in (-125, -50):
+            frame, _ = gauge_frame(angle)
+            excluded = ignored_region_mask(frame.shape, settings)
+            for scale in (0.5, 1, 2):
+                ratios = []
+                for background in ((0, 0, 0), (175, 125, 65), settings.color):
+                    scene = frame.copy()
+                    scene[excluded] = background
+                    scene = cv2.resize(scene, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+                    # Apply background after scaling so edge resampling cannot change the band.
+                    reference = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+                    outside = ignored_region_mask(scene.shape, settings)
+                    scene[~outside] = reference[~outside]
+                    marker = find_color_marker(scene, settings)
+                    self.assertIsNotNone(marker)
+                    ratios.append(color_band_state(scene, marker, settings))
+                self.assertEqual(ratios, [ratios[0]] * 3)
+                self.assertEqual(ratios[0][0], angle == -125)
+        settings.ignore_polygon = settings.include_polygon
+        self.assertIsNone(find_color_marker(frame, settings))
+
+    def test_include_polygon_validation_and_roundtrip(self):
+        polygon = ((0, 0), (1, 0), (1, 1), (0, 1))
+        settings = PositionControl(include_polygon=polygon)
+        self.assertEqual(PositionControl.from_dict(json.loads(json.dumps(settings.to_dict()))), settings)
+        self.assertEqual(PositionControl.from_dict({}).include_polygon, ())
+        for points in (None, [(0, 0)], [(0, 0), (1, 0), (2, 1)]):
+            with self.assertRaises(ValueError):
+                PositionControl.from_dict({"include_polygon": points})
+
+    def test_ignored_timer_length_scale_and_missing_arrow(self):
+        settings = PositionControl(region=(0, 0, 100, 60), min_area=20, max_area=2000,
+                                   ignore_polygon=((0, 0.55), (1, 0.55), (1, 1), (0, 1)))
+        for length in (0, 10, 40, 90):
+            frame = np.zeros((60, 100, 3), dtype=np.uint8)
+            frame[20:30, 20:30] = settings.color
+            frame[35:45, 5:5 + length] = settings.color
+            for scale in (0.5, 1, 2):
+                with self.subTest(length=length, scale=scale):
+                    scaled = cv2.resize(frame, None, fx=scale, fy=scale,
+                                        interpolation=cv2.INTER_NEAREST)
+                    marker = find_color_marker(scaled, settings)
+                    self.assertIsNotNone(marker)
+                    self.assertLess(marker[0][1], 30 * scale)
+            frame[20:30, 20:30] = 0
+            self.assertIsNone(find_color_marker(frame, settings))
+
+    def test_ignored_pixels_do_not_dilute_band_or_join_arrow(self):
+        settings = PositionControl(region=(0, 0, 60, 60), band_margin=1,
+                                   ignore_polygon=((0, 0.5), (1, 0.5), (1, 1), (0, 1)))
+        frame = np.full((60, 60, 3), settings.band_color, dtype=np.uint8)
+        frame[20:30, 25:35] = settings.color
+        frame[30:, :] = settings.color  # 時間條與箭頭相接
+        marker = find_color_marker(frame, settings)
+        self.assertEqual(marker[1], (25, 20, 10, 10))
+        self.assertEqual(color_band_state(frame, marker, settings), (True, 1.0))
+        settings.ignore_polygon = ((0, 0), (1, 0), (1, 1), (0, 1))
+        self.assertIsNone(find_color_marker(frame, settings))
+        self.assertEqual(color_band_state(frame, marker, settings, True), (False, None))
+
+    def test_ignore_polygon_roundtrip_and_invalid_profiles(self):
+        settings = PositionControl(region=(0, 0, 60, 60),
+                                   ignore_polygon=((0, 0.5), (0.5, 0.2), (1, 0.5), (1, 1), (0, 1)))
+        settings.validate()
+        self.assertEqual(PositionControl.from_dict(json.loads(json.dumps(settings.to_dict()))), settings)
+        self.assertEqual(PositionControl.from_dict({}).ignore_polygon, ())
+        for points in (None, "bad", [1, 2, 3], [(0, 0)],
+                       [(0, 0), (0.5, 0.5), (1, 1)],
+                       [(0, 0), (1, 0), (float("nan"), 1)],
+                       [(0, 0), (1, 0), (2, 1)],
+                       [(0, 0), (1, 1), (1, 0), (0, 0.8)],
+                       [(0, 0), (1, 0), (1, 1), (0, 0)]):
+            with self.subTest(points=points), self.assertRaises(ValueError):
+                PositionControl.from_dict({"ignore_polygon": points})
+
     def test_preview_samples_match_runtime_ratio(self):
         settings = PositionControl(band_margin=1)
         frame = np.full((40, 40, 3), (115, 170, 75), dtype=np.uint8)

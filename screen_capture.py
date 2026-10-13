@@ -63,6 +63,20 @@ def _run_tesseract(image, executable, tessdata, *, psm, languages, whitelist=Non
         return []
 
 
+def ignored_region_mask(shape, settings: PositionControl):
+    """將相對座標遮罩換算到目前偵測區塊；預覽與實際辨識共用。"""
+    h, w = shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if settings.include_polygon:
+        mask[:] = 1
+        points = np.rint(np.array(settings.include_polygon) * (w - 1, h - 1)).astype(np.int32)
+        cv2.fillPoly(mask, [points], 0)
+    if settings.ignore_polygon:
+        points = np.rint(np.array(settings.ignore_polygon) * (w - 1, h - 1)).astype(np.int32)
+        cv2.fillPoly(mask, [points], 1)
+    return mask.astype(bool)
+
+
 def find_color_marker(frame: np.ndarray, settings: PositionControl):
     """從 RGB 區域找唯一的色彩標記；多個候選時不猜測。"""
     # ponytail: 顏色與面積需能排除背景；同大小的同色色塊仍需形狀辨識。
@@ -72,6 +86,8 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
     target = cv2.cvtColor(np.uint8([[settings.color]]), cv2.COLOR_RGB2HSV)[0, 0]
     hue_delta = np.abs(hsv[:, :, 0] - int(target[0]))
     hue_delta = np.minimum(hue_delta, 180 - hue_delta)
+    ignored = (ignored_region_mask(frame.shape, settings)
+               if settings.ignore_polygon or settings.include_polygon else None)
     area_scale = 1.0
     if settings.max_area and settings.region_space == "template" and settings.region:
         area_scale = frame.shape[0] * frame.shape[1] / (settings.region[2] * settings.region[3])
@@ -82,6 +98,8 @@ def find_color_marker(frame: np.ndarray, settings: PositionControl):
                 & (np.abs(hsv[:, :, 2] - int(target[2])) <= sv_tolerance)).astype(np.uint8)
         if frame.shape[2] == 4:
             mask[frame[:, :, 3] == 0] = 0
+        if ignored is not None:
+            mask[ignored] = 0
         _, _, stats, centers = cv2.connectedComponentsWithStats(mask)
         areas = stats[1:, cv2.CC_STAT_AREA]
         eligible = areas >= settings.min_area * area_scale
@@ -110,6 +128,9 @@ def color_band_samples(frame, marker, settings: PositionControl):
           max(0, x - x1 - padding):x - x1 + w + padding] = False
     if roi.shape[2] == 4:
         valid &= roi[:, :, 3] > 0
+    if settings.ignore_polygon or settings.include_polygon:
+        ignored = ignored_region_mask(frame.shape, settings)
+        valid &= ~ignored[y1:y1 + roi.shape[0], x1:x1 + roi.shape[1]]
     if np.count_nonzero(valid) < max(8, round(w * h * 0.05)):
         return None
     target = cv2.cvtColor(np.uint8([[settings.band_color]]), cv2.COLOR_RGB2HSV)[0, 0]

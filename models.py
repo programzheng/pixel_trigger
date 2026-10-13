@@ -119,6 +119,8 @@ class PositionControl:
     band_stop: float = 0.6
     band_margin: float = 0.5  # 箭頭外框尺寸的倍數
     band_missing_ms: int = 150
+    ignore_polygon: tuple[tuple[float, float], ...] = ()  # 偵測區塊內的相對座標，0~1
+    include_polygon: tuple[tuple[float, float], ...] = ()  # 空值保留整個偵測區塊
 
     def validate(self):
         if self.region_space not in ("screen", "template"):
@@ -150,6 +152,40 @@ class PositionControl:
             raise ValueError("取樣範圍必須介於箭頭大小的 0.1~3 倍。")
         if type(self.band_missing_ms) is not int or self.band_missing_ms < 0:
             raise ValueError("漏判容忍時間必須是非負整數（毫秒）。")
+        self.validate_polygons()
+
+    def validate_polygons(self):
+        for points in (self.ignore_polygon, self.include_polygon):
+            self._validate_polygon(points)
+
+    @staticmethod
+    def _validate_polygon(points):
+        if not isinstance(points, (tuple, list)):
+            raise ValueError("圈選區域必須是多邊形座標。")
+        if points:
+            if (not 3 <= len(points) <= 128 or any(
+                    not isinstance(p, (tuple, list)) or len(p) != 2 or any(
+                        type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1
+                        for v in p) for p in points)):
+                raise ValueError("圈選區域需有 3~128 個頂點，座標必須介於 0~1。")
+            def cross(a, b, c):
+                return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+            edges = list(zip(points, points[1:] + points[:1]))
+            area = sum(a[0] * b[1] - b[0] * a[1] for a, b in edges)
+            if abs(area) < 1e-10 or len({tuple(p) for p in points}) != len(points):
+                raise ValueError("圈選區域不能退化成直線或含重複頂點。")
+            for i, (a, b) in enumerate(edges):
+                for j, (c, d) in enumerate(edges[i + 1:], i + 1):
+                    if j == i + 1 or (i == 0 and j == len(edges) - 1):
+                        continue
+                    if (max(a[0], b[0]) >= min(c[0], d[0])
+                            and max(c[0], d[0]) >= min(a[0], b[0])
+                            and max(a[1], b[1]) >= min(c[1], d[1])
+                            and max(c[1], d[1]) >= min(a[1], b[1])
+                            and cross(a, b, c) * cross(a, b, d) <= 0
+                            and cross(c, d, a) * cross(c, d, b) <= 0):
+                        raise ValueError("圈選區域的邊不可交叉。")
 
     def to_dict(self) -> dict:
         return {"region_space": self.region_space, "region": self.region, "color": self.color,
@@ -157,11 +193,12 @@ class PositionControl:
                 "press_at": self.press_at, "release_at": self.release_at,
                 "band_color": self.band_color, "band_tolerance": self.band_tolerance,
                 "band_start": self.band_start, "band_stop": self.band_stop,
-                "band_margin": self.band_margin, "band_missing_ms": self.band_missing_ms}
+                "band_margin": self.band_margin, "band_missing_ms": self.band_missing_ms,
+                "ignore_polygon": self.ignore_polygon, "include_polygon": self.include_polygon}
 
     @classmethod
     def from_dict(cls, d: dict) -> PositionControl:
-        return cls(region_space=d.get("region_space", "screen" if d.get("region") else "template"),
+        settings = cls(region_space=d.get("region_space", "screen" if d.get("region") else "template"),
                    region=tuple(d["region"]) if d.get("region") else None,
                    color=tuple(d.get("color", (255, 185, 50))),
                    tolerance=d.get("tolerance", 15), min_area=d.get("min_area", 20),
@@ -171,7 +208,13 @@ class PositionControl:
                    band_tolerance=d.get("band_tolerance", 15),
                    band_start=d.get("band_start", 0.8), band_stop=d.get("band_stop", 0.6),
                    band_margin=d.get("band_margin", 0.5),
-                   band_missing_ms=d.get("band_missing_ms", 150))
+                   band_missing_ms=d.get("band_missing_ms", 150),
+                   ignore_polygon=d.get("ignore_polygon", ()),
+                   include_polygon=d.get("include_polygon", ()))
+        settings.validate_polygons()
+        settings.ignore_polygon = tuple(tuple(p) for p in settings.ignore_polygon)
+        settings.include_polygon = tuple(tuple(p) for p in settings.include_polygon)
+        return settings
 
 
 # ── Combo ─────────────────────────────────────────────────
@@ -267,6 +310,8 @@ class Profile:
     window_title: str = ""
     window_handle: int = field(default=0, repr=False, compare=False)
     window_pid: int = field(default=0, repr=False, compare=False)
+    debug_hotkey: str = "F9"
+    background_debug_hotkey: str = "F10"
 
     def to_dict(self) -> dict:
         region = list(self.scan_region) if self.scan_region else None
@@ -274,6 +319,8 @@ class Profile:
             "name": self.name,
             "id": self.id,
             "background_hotkey": self.background_hotkey,
+            "debug_hotkey": self.debug_hotkey,
+            "background_debug_hotkey": self.background_debug_hotkey,
             "scan_region": region,
             "scan_interval": self.scan_interval,
             "hotkey": self.hotkey,
@@ -292,6 +339,8 @@ class Profile:
             name=d.get("name", "預設"),
             id=d.get("id", uuid.uuid4().hex),
             background_hotkey=d.get("background_hotkey", "F7"),
+            debug_hotkey=d.get("debug_hotkey", "F9"),
+            background_debug_hotkey=d.get("background_debug_hotkey", "F10"),
             scan_region=region,
             scan_interval=d.get("scan_interval", 0.1),
             hotkey=d.get("hotkey", "F6"),
