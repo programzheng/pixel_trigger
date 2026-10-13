@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
+import math
 import random
 import time
 import winsound
+from collections.abc import Callable
 
 import pyautogui
 
 pyautogui.PAUSE = 0
+
+
+class _MouseInput(ctypes.Structure):
+    _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _InputUnion(ctypes.Union):
+    # MOUSEINPUT is the largest INPUT union member on both Win32 and Win64.
+    _fields_ = [("mi", _MouseInput)]
+
+
+class _Input(ctypes.Structure):
+    _anonymous_ = ("data",)
+    _fields_ = [("type", wintypes.DWORD), ("data", _InputUnion)]
+
+
+_send_input = ctypes.WinDLL("user32", use_last_error=True).SendInput
+_send_input.argtypes = (wintypes.UINT, ctypes.POINTER(_Input), ctypes.c_int)
+_send_input.restype = wintypes.UINT
+_CLICK_FLAGS = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010),
+                "middle": (0x0020, 0x0040)}
 
 
 def play_sound(delay_min=0, delay_max=0, stop_event=None):
@@ -54,15 +81,46 @@ def mouse_rapid_click(
     interval_min: float = 0.05,
     interval_max: float = 0.15,
     stop_event=None,
+    *,
+    on_rate: Callable[[int, float], None] | None = None,
 ):
-    """連續快速點擊滑鼠"""
-    end_time = time.time() + duration
-    while time.time() < end_time:
-        if stop_event and stop_event.is_set():
-            break
-        pyautogui.click(button=button)
-        if not _interruptible_sleep(random.uniform(interval_min, interval_max), stop_event):
-            break
+    """直接發送成對的按下／放開；統計成功送入 Windows 的點擊，非遊戲接收量。"""
+    if (button not in _CLICK_FLAGS
+            or any(not math.isfinite(v) or v < 0 for v in (duration, interval_min, interval_max))
+            or interval_min > interval_max):
+        raise ValueError("連點按鍵、持續時間或間隔不合法。")
+    inputs = (_Input * 2)(*(_Input(type=0, mi=_MouseInput(dwFlags=flag))
+                            for flag in _CLICK_FLAGS[button]))
+    sample_start = time.perf_counter()
+    end_time = sample_start + duration
+    count = 0
+    try:
+        while time.perf_counter() < end_time:
+            if stop_event and stop_event.is_set():
+                break
+            pyautogui.failSafeCheck()
+            if stop_event and stop_event.is_set():
+                break
+            ctypes.set_last_error(0)
+            sent = _send_input(2, inputs, ctypes.sizeof(_Input))
+            if sent != 2:
+                error = ctypes.get_last_error()
+                if sent:
+                    release_mouse(button)  # Partial insertion may leave the button down.
+                raise OSError(error, f"SendInput 只送出 {sent}/2 個事件；請檢查目標視窗權限。")
+            count += 1
+            now = time.perf_counter()
+            if on_rate is not None and now - sample_start >= 1:
+                on_rate(count, now - sample_start)
+                count, sample_start = 0, now
+            interval = random.uniform(interval_min, interval_max) if interval_max else 0
+            remaining = end_time - time.perf_counter()
+            if interval > 0 and remaining > 0:
+                if not _interruptible_sleep(min(interval, remaining), stop_event):
+                    break
+    finally:
+        if on_rate is not None and count:
+            on_rate(count, max(time.perf_counter() - sample_start, 1e-9))
 
 
 def mouse_hold(

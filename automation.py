@@ -494,6 +494,7 @@ class HookEngine:
                 action.interval_min,
                 action.interval_max,
                 stop_event,
+                on_rate=lambda count, elapsed: self._log_click_rate(combo, count, elapsed),
             )
         elif at == ActionType.HOLD_MOUSE:
             input_controller.mouse_hold(
@@ -638,6 +639,11 @@ class HookEngine:
             if not stop_event.is_set():
                 time.sleep(0.02)
 
+    def _log_click_rate(self, combo, count, elapsed):
+        self._log(combo, "連點發送統計",
+                  f"{count / elapsed:.1f} 次/秒；{count} 次／{elapsed:.3f} 秒（非遊戲接收量）",
+                  category="click_rate")
+
     def _repeat_action(self, combo: Combo, stop_event: threading.Event):
         action = combo.action
         at = action.action_type
@@ -654,6 +660,7 @@ class HookEngine:
                 interval_min=action.interval_min,
                 interval_max=action.interval_max,
                 stop_event=stop_event,
+                on_rate=lambda count, elapsed: self._log_click_rate(combo, count, elapsed),
             )
         elif at == ActionType.KEY_PRESS:
             input_controller.key_press(

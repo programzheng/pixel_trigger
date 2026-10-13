@@ -172,7 +172,7 @@ class ResponsiveAutomationTest(unittest.TestCase):
                                   delay_min=0, delay_max=0))
                     stopped = threading.Event()
                     target = engine if action_type == ActionType.CLICK_IMAGE else input_controller
-                    with patch.object(target, method, side_effect=lambda *args: stopped.set()) as run:
+                    with patch.object(target, method, side_effect=lambda *args, **kwargs: stopped.set()) as run:
                         engine._controlled_action_loop(combo, stopped)
                         run.assert_called_once()
                         self.assertIs(run.call_args.args[-1], stopped)
