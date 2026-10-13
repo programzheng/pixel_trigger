@@ -1,6 +1,6 @@
 [project]
 name = "pixel-trigger"
-version = "0.2.2"
+version = "0.2.3"
 description = "通用圖像觸發自動化工具"
 requires-python = ">=3.12"
 dependencies = [
