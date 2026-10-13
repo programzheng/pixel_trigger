@@ -246,6 +246,34 @@ class PositionControlTest(unittest.TestCase):
                     results.append(editor.lbl_position_status.cget("text"))
                     self.assertEqual(editor.frm_position.winfo_manager(), "pack")
                     self.assertEqual(editor.frm_duration.winfo_manager(), "pack")
+                    editor._start_ignore_polygon()
+                    editor._position_preview_click(SimpleNamespace(x=200, y=100))
+                    editor._finish_ignore_polygon()
+                    self.assertIsNotNone(editor._ignore_draft)
+                    self.assertEqual(editor._ignore_polygon, ())
+                    editor._undo_ignore_point()
+                    self.assertEqual(editor._ignore_draft, [])
+                    for x, y in ((200, 100), (300, 100), (300, 130), (200, 130)):
+                        editor._position_preview_click(SimpleNamespace(x=x, y=y))
+                    editor._finish_ignore_polygon()
+                    polygon = editor._ignore_polygon
+                    self.assertEqual(len(polygon), 4)
+                    self.assertIsNone(editor._ignore_draft)
+                    editor._start_ignore_polygon()
+                    editor._cancel_ignore_polygon()
+                    self.assertEqual(editor._position_settings().ignore_polygon, polygon)
+                    editor.position_region_vars[0].set("10")
+                    self.assertEqual(editor._ignore_polygon, ())
+                    editor._ignore_polygon = polygon
+                    editor._preview_position()
+                    self.settings.ignore_polygon = polygon
+                    editor._start_ignore_polygon("include")
+                    for x, y in ((0, 0), (339, 0), (339, 130), (0, 130)):
+                        editor._position_preview_click(SimpleNamespace(x=x, y=y))
+                    editor._finish_ignore_polygon()
+                    self.assertEqual(len(editor._include_polygon), 4)
+                    self.settings.include_polygon = editor._include_polygon
+                    self.assertEqual(editor._ignore_polygon, polygon)
                     editor._ok()
                 finally:
                     if editor.win.winfo_exists():

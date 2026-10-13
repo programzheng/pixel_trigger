@@ -30,7 +30,7 @@ from window_target import capture_region, list_windows
 from automation import HookEngine
 from calc import BackgroundCalc, accounting_day, validate_combo
 from screen_capture import ScreenCapture
-from screen_capture import find_color_marker, color_band_samples, ocr_from_screen
+from screen_capture import find_color_marker, color_band_samples, ignored_region_mask, ocr_from_screen
 from models import (
     Action,
     ActionType,
@@ -399,12 +399,12 @@ class App:
         self._hotkeys_enabled = True
         self._unregister_hotkeys()
         try:
-            active = tuple(frozenset(step) for step in keyboard.parse_hotkey(self.profile.hotkey))
-            background = tuple(frozenset(step) for step in keyboard.parse_hotkey(self.profile.background_hotkey))
-            if active == background:
-                raise ValueError("主動與背景快捷鍵不可相同。")
-            for key, event in ((self.profile.hotkey, "hotkey"),
-                               (self.profile.background_hotkey, "background_hotkey")):
+            bindings = ((self.profile.hotkey, "hotkey"),
+                        (self.profile.background_hotkey, "background_hotkey"),
+                        (self.profile.debug_hotkey, "debug_hotkey"),
+                        (self.profile.background_debug_hotkey, "background_debug_hotkey"))
+            self._validate_hotkeys([key for key, _ in bindings])
+            for key, event in bindings:
                 self._hotkeys.append(keyboard.add_hotkey(
                     key, lambda event=event: self._msg_queue.append((event,))))
         except (ValueError, KeyError) as error:
@@ -412,9 +412,19 @@ class App:
             messagebox.showerror("快捷鍵設定錯誤", str(error))
 
     def _refresh_hotkeys(self):
-        self.lbl_hotkey.config(text=f"主動: {self.profile.hotkey}　背景: {self.profile.background_hotkey}")
+        self.lbl_hotkey.config(text=(
+            f"主動: {self.profile.hotkey}　背景: {self.profile.background_hotkey}\n"
+            f"主動 Debug: {self.profile.debug_hotkey}　背景 Debug: {self.profile.background_debug_hotkey}"))
         if self._hotkeys_enabled:
             self._register_hotkeys()
+
+    @staticmethod
+    def _validate_hotkeys(keys):
+        if any(not key.strip() for key in keys):
+            raise ValueError("快捷鍵不可留空。")
+        parsed = [tuple(frozenset(step) for step in keyboard.parse_hotkey(key)) for key in keys]
+        if len(set(parsed)) != len(parsed):
+            raise ValueError("快捷鍵不可相同。")
 
     def _configure_hotkeys(self):
         profile = self.profile
@@ -425,39 +435,40 @@ class App:
                 self.entries = []
                 for row, (label, value) in enumerate((
                         ("主動偵測快捷鍵:", profile.hotkey),
-                        ("背景偵測快捷鍵:", profile.background_hotkey))):
+                        ("背景偵測快捷鍵:", profile.background_hotkey),
+                        ("主動 Debug 快捷鍵:", profile.debug_hotkey),
+                        ("背景 Debug 快捷鍵:", profile.background_debug_hotkey))):
                     ttk.Label(parent, text=label).grid(row=row, column=0, padx=8, pady=6)
                     entry = ttk.Entry(parent, width=24)
                     entry.insert(0, value)
                     entry.grid(row=row, column=1, padx=8, pady=6)
                     self.entries.append(entry)
-                ttk.Label(parent, text="例如 F6、F7、ctrl+shift+b").grid(row=2, column=0, columnspan=2, pady=5)
+                ttk.Label(parent, text="例如 F6、F7、F9、F10、ctrl+shift+b").grid(row=4, column=0, columnspan=2, pady=5)
                 return self.entries[0]
 
             def apply(self):
                 self.result = tuple(entry.get().strip() for entry in self.entries)
 
             def validate(self):
-                active, background = (entry.get().strip() for entry in self.entries)
+                keys = tuple(entry.get().strip() for entry in self.entries)
                 try:
-                    if not active or not background:
-                        raise ValueError("快捷鍵不可留空。")
-                    if (tuple(frozenset(step) for step in keyboard.parse_hotkey(active))
-                            == tuple(frozenset(step) for step in keyboard.parse_hotkey(background))):
-                        raise ValueError("兩個快捷鍵不可相同。")
-                    old = profile.hotkey, profile.background_hotkey
-                    profile.hotkey, profile.background_hotkey = active, background
+                    app._validate_hotkeys(keys)
+                    old = (profile.hotkey, profile.background_hotkey,
+                           profile.debug_hotkey, profile.background_debug_hotkey)
+                    (profile.hotkey, profile.background_hotkey,
+                     profile.debug_hotkey, profile.background_debug_hotkey) = keys
                     try:
                         profile_manager.save_profile(profile, app._profile_path.name if app._profile_path else None)
                     except Exception:
-                        profile.hotkey, profile.background_hotkey = old
+                        (profile.hotkey, profile.background_hotkey,
+                         profile.debug_hotkey, profile.background_debug_hotkey) = old
                         raise
                     return True
                 except Exception as error:
                     messagebox.showerror("快捷鍵設定錯誤", str(error), parent=self)
                     return False
 
-        result = HotkeyDialog(self.root, "設定主動／背景快捷鍵").result
+        result = HotkeyDialog(self.root, "設定快捷鍵").result
         if result is None:
             return
         self._refresh_hotkeys()
@@ -1219,6 +1230,9 @@ class App:
                     self._refresh_combo_tree()
             elif kind == "background_hotkey":
                 self._toggle_background()
+            elif kind in ("debug_hotkey", "background_debug_hotkey"):
+                mode = self._debug_mode if kind == "debug_hotkey" else self._background_debug_mode
+                mode.set(not mode.get())
             elif kind == "background_status":
                 self.btn_background.config(
                     text="停止背景偵測" if self.background.running else "啟動背景偵測",
@@ -1967,11 +1981,33 @@ class ComboEditor:
                                          bg="#222222", highlightthickness=0)
         self.position_canvas.pack(anchor="w")
         self.position_canvas.bind("<Button-1>", self._position_preview_click)
+        self._ignore_polygon = settings.ignore_polygon
+        self._include_polygon = settings.include_polygon
+        self._polygon_kind = "ignore"
+        self._ignore_draft = None
+        row = ttk.Frame(self.frm_position)
+        row.pack(fill="x")
+        ttk.Button(row, text="圈選刻度帶有效範圍",
+                   command=lambda: self._start_ignore_polygon("include")).pack(side="left")
+        ttk.Button(row, text="清除有效範圍", command=self._clear_include_polygon).pack(side="left")
+        row = ttk.Frame(self.frm_position)
+        row.pack(fill="x")
+        for label, command in (("圈選忽略區域", self._start_ignore_polygon),
+                               ("完成", self._finish_ignore_polygon),
+                               ("復原一點", self._undo_ignore_point),
+                               ("取消", self._cancel_ignore_polygon),
+                               ("清除忽略", self._clear_ignore_polygon)):
+            ttk.Button(row, text=label, command=command).pack(side="left")
+        ttk.Label(self.frm_position, text="沿刻度帶外緣、再沿內緣反向點選，按完成。\n"
+                  "藍框內才辨識；紫色排除。未圈有效範圍時使用整張區塊。\n"
+                  "保留箭頭完整路徑；換圖或改偵測範圍會清除兩種區域。", wraplength=340).pack(anchor="w")
         self.lbl_position_status = ttk.Label(self.frm_position, text="先框選觸發圖片區塊，再點圖片取色或設定界線。",
                                             wraplength=340, justify="left")
         self.lbl_position_status.pack(anchor="w")
         self._position_frame = None
         self.win.bind("<Destroy>", self._cancel_position_preview, add="+")
+        for var in (self.var_image, *self.position_region_vars):
+            var.trace_add("write", self._clear_position_polygons)
         for var in (self.var_band_color, self.var_band_tolerance, self.var_band_start,
                     self.var_band_stop, self.var_band_margin, self.var_band_missing_ms, self.var_position_color,
                     self.var_position_tolerance, self.var_position_area,
@@ -2004,7 +2040,8 @@ class ComboEditor:
             band_start=self._to_float(self.var_band_start.get()),
             band_stop=self._to_float(self.var_band_stop.get()),
             band_margin=self._to_float(self.var_band_margin.get()),
-            band_missing_ms=int(self.var_band_missing_ms.get()))
+            band_missing_ms=int(self.var_band_missing_ms.get()),
+            ignore_polygon=self._ignore_polygon, include_polygon=self._include_polygon)
         settings.validate()
         try:
             with Image.open(self.var_image.get().strip()) as image:
@@ -2039,6 +2076,53 @@ class ComboEditor:
                     self.win.after_cancel(job)
                     setattr(self, attribute, None)
 
+    def _start_ignore_polygon(self, kind="ignore"):
+        self.var_position_preview.set(True)
+        self._preview_position()
+        if self._position_frame is not None:
+            self._polygon_kind = kind
+            self._ignore_draft = []
+            self._preview_position()
+
+    def _finish_ignore_polygon(self):
+        if self._ignore_draft is None:
+            return
+        attribute = "_include_polygon" if self._polygon_kind == "include" else "_ignore_polygon"
+        previous = getattr(self, attribute)
+        setattr(self, attribute, tuple(self._ignore_draft))
+        try:
+            if len(self._ignore_draft) < 3:
+                raise ValueError("請至少點選三個頂點。")
+            self._position_settings()
+        except (ValueError, TypeError) as e:
+            setattr(self, attribute, previous)
+            self.lbl_position_status.config(text=str(e))
+            return
+        self._ignore_draft = None
+        self._preview_position()
+
+    def _undo_ignore_point(self):
+        if self._ignore_draft:
+            self._ignore_draft.pop()
+            self._preview_position()
+
+    def _cancel_ignore_polygon(self):
+        self._ignore_draft = None
+        self._preview_position()
+
+    def _clear_ignore_polygon(self, *args):
+        self._ignore_polygon = ()
+        self._ignore_draft = None
+        self._preview_position()
+
+    def _clear_include_polygon(self):
+        self._include_polygon = ()
+        self._cancel_ignore_polygon()
+
+    def _clear_position_polygons(self, *args):
+        self._include_polygon = ()
+        self._clear_ignore_polygon()
+
     def _preview_position(self):
         if self._position_preview_job is not None:
             self.win.after_cancel(self._position_preview_job)
@@ -2061,6 +2145,8 @@ class ComboEditor:
             marker = find_color_marker(frame, settings)
             samples = color_band_samples(frame, marker, settings) if band_mode else None
             preview = frame.copy()
+            ignored = ignored_region_mask(frame.shape, settings)
+            preview[ignored, :3] = (preview[ignored, :3].astype(np.uint16) + (200, 70, 230)) // 2
             if samples is not None:
                 x1, y1, valid, matched = samples
                 roi = preview[y1:y1 + valid.shape[0], x1:x1 + valid.shape[1], :3]
@@ -2071,6 +2157,9 @@ class ComboEditor:
             canvas = self.position_canvas
             canvas.delete("all")
             canvas.create_image(0, 0, image=self._position_photo, anchor="nw")
+            if settings.include_polygon:
+                points = [(x * (width - 1), y * (height - 1)) for x, y in settings.include_polygon]
+                canvas.create_polygon(*[v for p in points for v in p], fill="", outline="#40a0ff", width=2)
             if samples is not None:
                 x2, y2 = x1 + valid.shape[1], y1 + valid.shape[0]
                 canvas.create_rectangle(x1 * scale, y1 * scale, x2 * scale, y2 * scale,
@@ -2099,6 +2188,15 @@ class ComboEditor:
                     text += "\n青框：取樣範圍；綠色：符合色帶；橘色：其他有效像素。"
                 text += "\n預覽僅測設定圖片，不執行動作。"
                 self.lbl_position_status.config(text=text)
+            if self._ignore_draft is not None:
+                points = [(x * (width - 1), y * (height - 1)) for x, y in self._ignore_draft]
+                if len(points) > 1:
+                    canvas.create_line(*[v for p in points + points[:1] for v in p],
+                                       fill="#e060ff", width=2)
+                for x, y in points:
+                    canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill="#e060ff")
+                name = "刻度帶有效範圍" if self._polygon_kind == "include" else "忽略區域"
+                self.lbl_position_status.config(text=f"圈選{name}：已選 {len(points)} 點；按完成套用，取消保留原設定。")
         except (ValueError, TypeError, OSError) as e:
             self._position_frame = None
             self.position_canvas.delete("all")
@@ -2110,6 +2208,12 @@ class ComboEditor:
             return
         width, height = self._position_preview_size
         if not (0 <= event.x < width and 0 <= event.y < height):
+            return
+        if self._ignore_draft is not None:
+            if len(self._ignore_draft) < 128:
+                self._ignore_draft.append((event.x / max(1, width - 1),
+                                           event.y / max(1, height - 1)))
+            self._preview_position()
             return
         mode = self.var_position_click.get()
         if mode in ("取色", "色帶取色"):
@@ -2236,6 +2340,8 @@ class ComboEditor:
                 else self.combo.text_match_ratio
             )
             trigger = TriggerMode(self.var_trigger.get())
+            if trigger.tracks_marker and self._ignore_draft is not None:
+                raise ValueError("請先完成或取消區域圈選，再儲存。")
             position_settings = self._position_settings() if trigger.tracks_marker else self.combo.position_control
 
             at = self.var_action_type.get()

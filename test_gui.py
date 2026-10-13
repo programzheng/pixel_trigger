@@ -102,13 +102,32 @@ class ComboScaleDisplayTest(unittest.TestCase):
                 patch("gui.keyboard.remove_hotkey"):
             try:
                 app._register_hotkeys()
-                self.assertEqual(len(callbacks), 2)
+                self.assertEqual(len(callbacks), 4)
                 callbacks[0]()
                 callbacks[1]()
                 self.assertEqual(list(app._msg_queue)[-2:], [("hotkey",),
                                                             ("background_hotkey",)])
+                app._msg_queue.clear()
+                for expected in (True, False):
+                    callbacks[2]()
+                    callbacks[3]()
+                    app._poll_queue()
+                    self.assertEqual(app._debug_mode.get(), expected)
+                    self.assertEqual(app._background_debug_mode.get(), expected)
+                app.profile.debug_hotkey = "ctrl+shift+d"
+                app.profile.background_debug_hotkey = "ctrl+shift+b"
+                app._register_hotkeys()
+                self.assertEqual(app._hotkeys[-2:], ["ctrl+shift+d", "ctrl+shift+b"])
             finally:
                 app.on_close()
+
+    def test_hotkeys_reject_duplicates_blank_and_invalid_keys(self):
+        App._validate_hotkeys(["F6", "F7", "F9", "F10"])
+        for keys in (["F6", "F7", "f6", "F10"],
+                     ["F6", "F7", " ", "F10"],
+                     ["F6", "F7", "not-a-real-key", "F10"]):
+            with self.subTest(keys=keys), self.assertRaises(ValueError):
+                App._validate_hotkeys(keys)
 
     def test_system_theme_follows_changes_until_manual_switch(self):
         self.system_theme.return_value = "darkly"

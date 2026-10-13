@@ -298,23 +298,25 @@ class CalcTests(unittest.TestCase):
     def test_hotkeys_press_and_profile_rebinding(self):
         with patch.object(App, "_load_initial_profile"):
             app = App()
-        with patch("gui.keyboard.add_hotkey", side_effect=[1, 2, 3, 4]) as add, \
+        with patch("gui.keyboard.add_hotkey", side_effect=range(1, 9)) as add, \
                 patch("gui.keyboard.remove_hotkey") as remove:
             try:
                 app.root.withdraw()
                 app._register_hotkeys()
-                self.assertEqual([call.args[0] for call in add.call_args_list], ["F6", "F7"])
+                self.assertEqual([call.args[0] for call in add.call_args_list], ["F6", "F7", "F9", "F10"])
                 self.assertTrue(all(not call.kwargs.get("trigger_on_release", False)
                                     for call in add.call_args_list))
                 add.call_args_list[1].args[1]()
                 self.assertEqual(app._msg_queue.pop(), ("background_hotkey",))
-                app.profile = Profile(hotkey="F8", background_hotkey="F9")
+                app.profile = Profile(hotkey="F8", background_hotkey="F9",
+                                      debug_hotkey="F11", background_debug_hotkey="F12")
                 app._refresh_hotkeys()
-                self.assertEqual([call.args[0] for call in add.call_args_list], ["F6", "F7", "F8", "F9"])
-                self.assertEqual([call.args[0] for call in remove.call_args_list], [1, 2])
+                self.assertEqual([call.args[0] for call in add.call_args_list],
+                                 ["F6", "F7", "F9", "F10", "F8", "F9", "F11", "F12"])
+                self.assertEqual([call.args[0] for call in remove.call_args_list], [1, 2, 3, 4])
             finally:
                 app.on_close()
-            self.assertEqual([call.args[0] for call in remove.call_args_list], [1, 2, 3, 4])
+            self.assertEqual([call.args[0] for call in remove.call_args_list], list(range(1, 9)))
             self.assertEqual(app._hotkeys, [])
 
     def test_ui_profile_roundtrip_and_separate_controls(self):
@@ -344,24 +346,27 @@ class CalcTests(unittest.TestCase):
         finally:
             app.on_close()
 
-    def test_single_dialog_saves_both_hotkeys_and_rolls_back_on_failure(self):
+    def test_single_dialog_saves_all_hotkeys_and_rolls_back_on_failure(self):
         with patch.object(App, "_load_initial_profile"):
             app = App()
         try:
             def complete(dialog, *_args):
-                self.assertEqual(len(dialog.entries), 2)
-                for entry, value in zip(dialog.entries, ("F8", "F9")):
+                self.assertEqual(len(dialog.entries), 4)
+                for entry, value in zip(dialog.entries, ("F8", "F9", "F11", "F12")):
                     entry.delete(0, "end")
                     entry.insert(0, value)
                 dialog.ok()
             with patch.object(tk.Toplevel, "wait_window", autospec=True, side_effect=complete), patch("gui.profile_manager.save_profile") as save:
                 app._configure_hotkeys()
                 self.assertEqual((app.profile.hotkey, app.profile.background_hotkey), ("F8", "F9"))
+                self.assertEqual((app.profile.debug_hotkey, app.profile.background_debug_hotkey), ("F11", "F12"))
                 save.assert_called_once()
             app.profile.hotkey, app.profile.background_hotkey = "F6", "F7"
+            app.profile.debug_hotkey, app.profile.background_debug_hotkey = "F9", "F10"
             with patch.object(tk.Toplevel, "wait_window", autospec=True, side_effect=complete), patch("gui.profile_manager.save_profile", side_effect=OSError("disk full")), patch("gui.messagebox.showerror") as error:
                 app._configure_hotkeys()
                 self.assertEqual((app.profile.hotkey, app.profile.background_hotkey), ("F6", "F7"))
+                self.assertEqual((app.profile.debug_hotkey, app.profile.background_debug_hotkey), ("F9", "F10"))
                 error.assert_called_once()
         finally:
             app.on_close()
@@ -482,16 +487,17 @@ class CalcTests(unittest.TestCase):
                     for entry, value in zip(dialog.entries, values):
                         entry.delete(0, "end")
                         entry.insert(0, value)
-                for values in (("", "F7"), ("F7", "F7"), ("invalid-key", "F7")):
+                for values in (("", "F7", "F9", "F10"), ("F7", "F7", "F9", "F10"),
+                               ("invalid-key", "F7", "F9", "F10"), ("F9", "F7", "F9", "F10")):
                     fill(values)
                     dialog.ok()
                     self.assertTrue(dialog.winfo_exists())
                     self.assertEqual(tuple(e.get() for e in dialog.entries), values)
-                fill(("F8", "F9"))
+                fill(("F8", "F9", "F11", "F12"))
                 dialog.ok()
             with patch.object(tk.Toplevel, "wait_window", autospec=True, side_effect=complete), patch("gui.profile_manager.save_profile") as save, patch("gui.messagebox.showerror") as error:
                 app._configure_hotkeys()
-                self.assertEqual(error.call_count, 3)
+                self.assertEqual(error.call_count, 4)
                 save.assert_called_once()
                 self.assertEqual((app.profile.hotkey, app.profile.background_hotkey), ("F8", "F9"))
         finally:
