@@ -297,6 +297,61 @@ class Combo:
         )
 
 
+# ── Statistics ────────────────────────────────────────────
+@dataclass
+class Statistic:
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    name: str = "新統計"
+    source: str = "manual"
+    combo_id: str = ""
+    metric: str = "income"
+    period: str = "day"
+    reset_time: str = "00:00"
+    limit: int | None = 900
+    warning_ratio: float = 0.9
+    enabled: bool = True
+    archived: bool = False
+
+    def validate(self):
+        from datetime import datetime
+
+        if type(self.id) is not str or not self.id:
+            raise ValueError("統計 ID 不正確。")
+        if type(self.name) is not str or not self.name.strip():
+            raise ValueError("統計名稱不可為空。")
+        if self.source not in ("ocr", "manual") or (self.source == "ocr" and not self.combo_id):
+            raise ValueError("統計來源不正確。")
+        if self.metric not in ("income", "expense", "net", "count", "balance"):
+            raise ValueError("統計項目不正確。")
+        if self.metric == "balance" and self.source != "ocr":
+            raise ValueError("最新餘額只能使用 OCR 來源。")
+        if self.period not in ("day", "week", "month", "year"):
+            raise ValueError("統計期間不正確。")
+        try:
+            if datetime.strptime(self.reset_time, "%H:%M").strftime("%H:%M") != self.reset_time:
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise ValueError("每日重置時間必須是 HH:MM。") from None
+        if self.limit is not None and (type(self.limit) is not int or self.limit < 1):
+            raise ValueError("上限必須是正整數。")
+        if (type(self.warning_ratio) not in (int, float)
+                or not 0 < self.warning_ratio <= 1):
+            raise ValueError("預警比例必須大於 0 且不超過 100%。")
+        if type(self.enabled) is not bool or type(self.archived) is not bool:
+            raise ValueError("統計狀態不正確。")
+
+    def to_dict(self) -> dict:
+        return {key: getattr(self, key) for key in (
+            "id", "name", "source", "combo_id", "metric", "period", "reset_time",
+            "limit", "warning_ratio", "enabled", "archived")}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Statistic:
+        statistic = cls(**{key: d[key] for key in cls.__dataclass_fields__ if key in d})
+        statistic.validate()
+        return statistic
+
+
 # ── Profile ───────────────────────────────────────────────
 @dataclass
 class Profile:
@@ -307,6 +362,7 @@ class Profile:
     scan_interval: float = 0.1
     hotkey: str = "F6"
     combos: list[Combo] = field(default_factory=list)
+    statistics: list[Statistic] = field(default_factory=list)
     window_title: str = ""
     window_handle: int = field(default=0, repr=False, compare=False)
     window_pid: int = field(default=0, repr=False, compare=False)
@@ -325,6 +381,7 @@ class Profile:
             "scan_interval": self.scan_interval,
             "hotkey": self.hotkey,
             "combos": [c.to_dict() for c in self.combos],
+            "statistics": [s.to_dict() for s in self.statistics],
             "window_title": self.window_title,
         }
 
@@ -335,6 +392,18 @@ class Profile:
             region = tuple(region)
         else:
             region = None
+        combos = [Combo.from_dict(c) for c in d.get("combos", [])]
+        if "statistics" in d:
+            statistics = [Statistic.from_dict(s) for s in d["statistics"]]
+        else:
+            statistics = [Statistic(id=f"legacy-{c.id}", name=c.name, source="ocr",
+                                    combo_id=c.id, reset_time=c.daily_reset_time,
+                                    limit=c.daily_limit if type(c.daily_limit) is int and c.daily_limit > 0 else 900,
+                                    warning_ratio=c.warning_ratio if type(c.warning_ratio) in (int, float)
+                                    and 0 < c.warning_ratio <= 1 else 0.9)
+                          for c in combos if c.detection_mode == "background"]
+        if len({s.id for s in statistics}) != len(statistics):
+            raise ValueError("Profile 的統計 ID 重複。")
         return cls(
             name=d.get("name", "預設"),
             id=d.get("id", uuid.uuid4().hex),
@@ -344,6 +413,7 @@ class Profile:
             scan_region=region,
             scan_interval=d.get("scan_interval", 0.1),
             hotkey=d.get("hotkey", "F6"),
-            combos=[Combo.from_dict(c) for c in d.get("combos", [])],
+            combos=combos,
+            statistics=statistics,
             window_title=d.get("window_title", ""),
         )

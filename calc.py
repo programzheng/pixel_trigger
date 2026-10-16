@@ -1,4 +1,4 @@
-"""Visible-screen balance tracking and daily CSV ledger."""
+"""Visible-screen balance tracking and CSV ledger."""
 
 import csv
 import re
@@ -35,8 +35,6 @@ def validate_combo(combo):
     if (not region or len(region) != 4 or any(type(v) is not int for v in region)
             or min(region[2:]) < 1):
         raise ValueError("請設定數字區域的 X、Y 偏移及正整數寬高。")
-    if type(combo.daily_limit) is not int or combo.daily_limit < 1:
-        raise ValueError("每日上限必須是正整數。")
     try:
         if (type(combo.daily_reset_time) is not str
                 or datetime.strptime(combo.daily_reset_time, "%H:%M").strftime("%H:%M")
@@ -44,8 +42,8 @@ def validate_combo(combo):
             raise ValueError()
     except ValueError:
         raise ValueError("每日重置時間必須是 HH:MM。") from None
-    if not 0 < combo.warning_ratio <= 1 or not 0 <= combo.text_threshold <= 1:
-        raise ValueError("預警比例與 OCR 信心度設定不正確。")
+    if not 0 <= combo.text_threshold <= 1:
+        raise ValueError("OCR 信心度設定不正確。")
     if (type(combo.low_confidence_confirmations) is not int
             or not 2 <= combo.low_confidence_confirmations <= 10):
         raise ValueError("低信心確認次數必須是 2~10 的整數。")
@@ -55,7 +53,7 @@ def validate_combo(combo):
 
 class Ledger:
     def __init__(self, directory=None):
-        self.directory = Path(directory) if directory else PROFILES_DIR.parent / "calc"
+        self.directory = Path(directory) if directory else PROFILES_DIR.parent / "statistics" / "ocr"
         self.lock = threading.RLock()
         self.rows = []
         self.last = {}
@@ -298,7 +296,9 @@ class BackgroundCalc:
         return row
 
     def _loop(self, profile, combos):
-        pending, warned = {}, set()
+        from stat_tracking import crossing_level, statistic_rows, statistic_value
+
+        pending = {}
         try:
             while not self.stop_event.is_set():
                 region = capture_region(profile)
@@ -345,20 +345,22 @@ class BackgroundCalc:
                         row = self.accept(profile, combo, value, text, confidence, now)
                         if row:
                             self._notify("background_record", combo.id, f"餘額 {value}，變動 {int(row['delta']):+d}")
-                        day = accounting_day(now, combo.daily_reset_time)
-                        income = self.ledger.snapshot(profile.id, combo.id, day)[0]
-                        level = "已達上限" if income >= combo.daily_limit else "接近上限" if income >= combo.daily_limit * combo.warning_ratio else None
-                        self._notify("background_read", combo.id,
-                                    f"餘額 {value}；今日收入 {income}/{combo.daily_limit}"
-                                    + (f"；{level}" if level else ""))
-                        key = (combo.id, day, level)
-                        if level and key not in warned:
-                            # Prior saved rows reveal whether this threshold was already crossed.
-                            prior = income - max(0, int(row["delta"])) if row else income
-                            threshold = combo.daily_limit if level == "已達上限" else combo.daily_limit * combo.warning_ratio
-                            if prior < threshold:
-                                self._notify("background_record", combo.id, f"{level}：{income}/{combo.daily_limit}")
-                            warned.add(key)
+                            with self.ledger.lock:
+                                records = list(self.ledger.rows)
+                            for stat in profile.statistics:
+                                if (not stat.enabled or stat.archived or stat.source != "ocr"
+                                        or stat.combo_id != combo.id or stat.limit is None):
+                                    continue
+                                day = accounting_day(now, stat.reset_time)
+                                before = statistic_value(stat, statistic_rows(
+                                    stat, profile.id, records[:-1], [], day))
+                                after = statistic_value(stat, statistic_rows(
+                                    stat, profile.id, records, [], day))
+                                level = crossing_level(stat, before, after)
+                                if level:
+                                    self._notify("background_stat", combo.id,
+                                                 f"{stat.name} {level}：{after}/{stat.limit}")
+                        self._notify("background_read", combo.id, f"餘額 {value}")
                 self.stop_event.wait(1)
         except Exception as error:
             self._notify("background_error", str(error))

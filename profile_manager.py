@@ -35,8 +35,13 @@ def save_profile(profile: Profile, filename: str | None = None) -> Path:
     if filename is None:
         filename = profile.name.replace(" ", "_") + ".json"
     path = PROFILES_DIR / filename
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(profile.to_dict(), f, ensure_ascii=False, indent=2)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with open(temp, "w", encoding="utf-8") as f:
+            json.dump(profile.to_dict(), f, ensure_ascii=False, indent=2)
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
     return path
 
 

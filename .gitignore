@@ -10,6 +10,7 @@ models/
 vendor/
 logs/
 calc/
+statistics/
 /app_settings.json
 /app_settings.tmp
 /settings/
