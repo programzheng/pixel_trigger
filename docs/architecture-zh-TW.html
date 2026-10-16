@@ -444,7 +444,7 @@
           <article class="ve-card"><div class="big-num">01</div><h3>定位帳面</h3><p>先以無數字的模板圖片找到餘額區域。</p></article>
           <article class="ve-card"><div class="big-num">02</div><h3>讀取數字</h3><p>優先使用內建數字模板，必要時交給 Tesseract。</p></article>
           <article class="ve-card"><div class="big-num">03</div><h3>抗誤判確認</h3><p>高信心讀值確認 2 次；低信心使用 Combo 設定的次數。</p></article>
-          <article class="ve-card"><div class="big-num">04</div><h3>記錄與告警</h3><p>寫入 <code>calc/YYYYMMDD.csv</code>，計算收入、支出、淨額與每日上限。</p></article>
+          <article class="ve-card"><div class="big-num">04</div><h3>記錄與告警</h3><p>寫入 <code>statistics/ocr/YYYYMMDD.csv</code>；各 profile 的統計規則獨立計算與提醒。</p></article>
         </figure>
         <div class="legend" aria-label="顏色圖例">
           <span style="--legend:var(--accent)">協調與介面</span>
@@ -494,7 +494,8 @@
             <ul class="compact-list">
               <li><code>profiles/*.json</code>：使用者自動化設定；不進版控。</li>
               <li><code>templates/</code>：觸發與點擊目標圖片；不進版控。</li>
-              <li><code>calc/*.csv</code>：按日期分檔的餘額異動紀錄。</li>
+              <li><code>statistics/ocr/*.csv</code>：新 OCR 餘額紀錄；<code>statistics/manual/*.csv</code>：手動收支紀錄。</li>
+              <li><code>calc/*.csv</code>：舊版紀錄，原檔保留，新統計不讀取。</li>
               <li><code>vendor/tesseract/</code>：由 <code>prepare_tesseract.py</code> 產生的離線 OCR runtime。</li>
               <li><code>dist/pixel_trigger.exe</code>：由 <code>build.py</code> 建立的 Nuitka 單檔 Windows 執行檔。</li>
               <li><code>test_*.py</code>：標準函式庫 <code>unittest</code> 的回歸測試。</li>

@@ -15,6 +15,7 @@ Pixel Trigger 是一款 Windows 桌面自動化工具，能根據畫面上的視
 - 將擷取範圍限制在指定螢幕區域或應用程式視窗。
 - 以 JSON 儲存可重複使用的自動化設定檔。
 - 將辨識到的數值變化記錄至每日 CSV 帳本。
+- 可為每個 profile 建立獨立統計，使用 OCR 餘額或手動收入、支出紀錄。
 - 透過日誌、預覽與滑鼠穿透的除錯覆蓋層檢查辨識結果。
 - 將應用程式與 OCR 模型封裝為可離線使用的 Windows 程式。
 
@@ -64,6 +65,10 @@ uv run python prepare_tesseract.py
 4. 選擇執行動作，調整信心門檻與時間設定。
 5. 使用已設定的全域快捷鍵啟動或停止偵測。
 
+在「統計」中可建立純手動統計，或選擇背景 OCR Combo 作為來源，並設定收入、
+支出、淨額、紀錄次數或最新餘額等規則與期間。新紀錄儲存在 `statistics/`；
+既有 `calc/` CSV 會原樣保留，但不計入新統計。
+
 設定檔與擷取的範本圖片分別儲存在 `profiles/` 與 `templates/`，這兩個目錄
 都不會納入版本控制。
 
@@ -102,6 +107,8 @@ uv run python build.py
 | `models.py` | 具型別的設定檔、組合、動作與觸發條件模型 |
 | `profile_manager.py` | JSON 設定檔持久化 |
 | `calc.py` | 背景數值辨識與 CSV 帳本處理 |
+| `stat_tracking.py` | 統計計算與手動 CSV 紀錄 |
+| `statistics_ui.py` | 獨立統計視窗與編輯器 |
 | `window_target.py` | Windows 視窗搜尋與客戶區域鎖定 |
 | `test_*.py` | 單元及整合導向的回歸測試 |
 

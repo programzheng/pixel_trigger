@@ -11,6 +11,8 @@ import time
 import warnings
 import threading
 import tomllib
+import uuid
+from copy import deepcopy
 import keyboard
 import tkinter as tk
 from datetime import datetime, timedelta
@@ -28,7 +30,8 @@ from app_settings import load_app_settings, save_app_settings
 import profile_manager
 from window_target import capture_region, list_windows
 from automation import HookEngine
-from calc import BackgroundCalc, accounting_day, validate_combo
+from calc import BackgroundCalc, validate_combo
+from statistics_ui import StatisticsWindow
 from screen_capture import ScreenCapture
 from screen_capture import find_color_marker, color_band_samples, ignored_region_mask, ocr_from_screen
 from models import (
@@ -200,7 +203,7 @@ class App:
         self.background = BackgroundCalc(lambda *msg: self._msg_queue.append(msg))
         self._hotkeys = []
         self._hotkeys_enabled = False
-        self._calc_window = None
+        self._statistics_window = None
         self._closing = False
 
         self._build_ui()
@@ -335,7 +338,7 @@ class App:
             frm_debug, text="背景 Debug 框線", variable=self._background_debug_mode,
             command=self._on_debug_mode_toggle,
         ).pack(side="left", padx=10)
-        ttk.Button(frm_ctrl, text="記帳統計", command=self._show_calc).pack(side="left")
+        ttk.Button(frm_ctrl, text="統計", command=self._show_calc).pack(side="left")
         ttk.Button(frm_ctrl, text="設定快捷鍵", command=self._configure_hotkeys).pack(side="left", padx=5)
         ttk.Button(frm_ctrl, text="關於／第三方授權", command=self._show_about).pack(side="right")
         self._refresh_hotkeys()
@@ -382,8 +385,8 @@ class App:
         if hasattr(self, "background"):
             self.background.stop()
             self.btn_background.config(text="啟動背景偵測", bootstyle="success")
-        if self._calc_window is not None and self._calc_window.winfo_exists():
-            self._calc_window.destroy()
+        if self._statistics_window is not None and self._statistics_window.win.winfo_exists():
+            self._statistics_window.win.destroy()
         self._msg_queue = collections.deque(
             m for m in self._msg_queue
             if not m[0].startswith("background") and m[0] not in ("status", "cycle", "triggered"))
@@ -491,233 +494,19 @@ class App:
             messagebox.showerror("背景偵測設定錯誤", str(error))
 
     def _show_calc(self):
-        if self._calc_window is not None and self._calc_window.winfo_exists():
-            self._calc_window.lift()
+        if self._statistics_window is not None and self._statistics_window.win.winfo_exists():
+            self._statistics_window.win.lift()
             return
         try:
             if not self.background.busy:
                 self.background.ledger.load(self.profile)
-        except Exception as error:
-            messagebox.showerror("CSV 載入失敗", str(error))
-            return
-        win = self._calc_window = tk.Toplevel(self.root)
-        win.title("金額記帳統計")
-        win.geometry("820x540")
-        row = ttk.Frame(win)
-        row.pack(fill="x", padx=10, pady=10)
-        self._calc_combos = [c for c in self.profile.combos if c.detection_mode == "background"]
-        self._calc_choice = ttk.Combobox(row, state="readonly", values=[f"{c.name} [{c.id}]" for c in self._calc_combos])
-        self._calc_choice.pack(side="left")
-        if self._calc_combos:
-            self._calc_choice.current(0)
-        ttk.Label(row, text="日期 YYYYMMDD:").pack(side="left", padx=5)
-        reset_time = self._calc_combos[0].daily_reset_time if self._calc_combos else "00:00"
-        self._calc_date = tk.StringVar(value=accounting_day(datetime.now(), reset_time))
-        self._calc_choice.bind("<<ComboboxSelected>>", lambda _event: self._calc_date.set(
-            accounting_day(datetime.now(), self._calc_combos[self._calc_choice.current()].daily_reset_time)))
-        ttk.Entry(row, textvariable=self._calc_date, width=10).pack(side="left")
-        self._calc_period = tk.StringVar(value="Daily")
-        ttk.OptionMenu(row, self._calc_period, "Daily", "Daily", "Month", "Years").pack(side="left")
-        self._calc_reset = ttk.Button(row, text="重設基準", command=self._reset_calc)
-        self._calc_reset.pack(side="left", padx=5)
-        self._calc_limit = ttk.Button(row, text="設定上限", command=self._set_calc_limit)
-        self._calc_limit.pack(side="left")
-        ttk.Button(row, text="在選取位置新增", command=self._add_calc_record).pack(side="left")
-        ttk.Button(row, text="編輯選取紀錄", command=self._edit_calc_record).pack(side="left")
-        ttk.Button(row, text="刪除選取紀錄", command=self._delete_calc_record).pack(side="left", padx=5)
-        self._calc_summary = ttk.Label(win, justify="left", anchor="w")
-        self._calc_summary.pack(fill="x", padx=10, pady=5)
-        columns = ("timestamp", "record_type", "balance", "delta")
-        self._calc_tree = ttk.Treeview(win, columns=columns, show="headings")
-        for column, label in zip(columns, ("時間", "類型", "身上金額", "變動")):
-            self._calc_tree.heading(column, text=label)
-            self._calc_tree.column(column, width=160)
-        scrollbar = ttk.Scrollbar(win, command=self._calc_tree.yview)
-        self._calc_tree.configure(yscrollcommand=scrollbar.set)
-        self._calc_tree.bind("<Double-1>", lambda _event: self._edit_calc_record())
-        scrollbar.pack(side="right", fill="y")
-        self._calc_tree.pack(fill="both", expand=True, padx=10, pady=5)
-        self._calc_view_key = None
-        self._update_calc_view()
+            self._statistics_window = StatisticsWindow(self)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("統計載入失敗", str(error), parent=self.root)
 
     def _update_calc_view(self):
-        if self._calc_window is None or not self._calc_window.winfo_exists():
-            return
-        index = self._calc_choice.current()
-        if not 0 <= index < len(self._calc_combos):
-            self._calc_reset.config(state="disabled")
-            self._calc_limit.config(state="disabled")
-            self._calc_summary.config(text="尚未設定背景記帳 Combo。")
-            return
-        combo = self._calc_combos[index]
-        self._calc_limit.config(state="disabled" if self.background.running else "normal")
-        self._calc_reset.config(state="normal" if combo.enabled and self.background.running
-                                and combo.id in self.background.active_ids else "disabled")
-        date = self._calc_date.get()
-        try:
-            datetime.strptime(date, "%Y%m%d")
-            if len(date) != 8:
-                raise ValueError()
-        except ValueError:
-            self._calc_summary.config(text="請輸入有效日期 YYYYMMDD。")
-            self._calc_tree.delete(*self._calc_tree.get_children())
-            self._calc_view_key = None
-            return
-        ledger = self.background.ledger
-        period = self._calc_period.get()
-        prefix = date[:{"Daily": 8, "Month": 6, "Years": 4}[period]]
-        with ledger.lock:
-            records = [(index, dict(record)) for index, record in enumerate(ledger.rows)
-                       if record["profile_id"] == self.profile.id
-                       and record["combo_id"] == combo.id
-                       and record["day"].startswith(prefix)]
-        daily = ledger.snapshot(self.profile.id, combo.id, date[:8])[:3]
-        monthly = ledger.snapshot(self.profile.id, combo.id, date[:6])[:3]
-        yearly = ledger.snapshot(self.profile.id, combo.id, date[:4])[:3]
-        today = ledger.snapshot(
-            self.profile.id, combo.id, accounting_day(datetime.now(), combo.daily_reset_time))[0]
-        state = "已達上限" if today >= combo.daily_limit else "接近上限" if today >= combo.daily_limit * combo.warning_ratio else "額度正常"
-        self._calc_summary.config(text=(
-            f"Daily 收入 {daily[0]}　支出 {daily[1]}　淨利 {daily[2]}\n"
-            f"Month 收入 {monthly[0]}　支出 {monthly[1]}　淨利 {monthly[2]}\n"
-            f"Years 收入 {yearly[0]}　支出 {yearly[1]}　淨利 {yearly[2]}\n"
-            f"今日正收入：{today}/{combo.daily_limit}（{today / combo.daily_limit:.1%}）　"
-            f"{'剩餘 ' + str(combo.daily_limit - today) if today <= combo.daily_limit else '超額 ' + str(today - combo.daily_limit)}　{state}\n"
-            f"CSV：{ledger.directory}"))
-        key = (combo.id, prefix, tuple((index, record["balance"], record["delta"])
-                                      for index, record in records))
-        if key != self._calc_view_key:
-            self._calc_tree.delete(*self._calc_tree.get_children())
-            for index, record in records:
-                self._calc_tree.insert("", "end", iid=str(index), values=(
-                    record["timestamp"],
-                    {"baseline": "建立基準", "change": "金額變動", "reset": "重設基準"}[record["record_type"]],
-                    record["balance"], record["delta"],
-                ))
-            self._calc_view_key = key
-
-    def _set_calc_limit(self):
-        index = self._calc_choice.current()
-        if not 0 <= index < len(self._calc_combos) or self.background.running:
-            return
-        combo = self._calc_combos[index]
-        limit = simpledialog.askinteger("設定每日收入上限", "每日收入上限：", parent=self._calc_window,
-                                        initialvalue=combo.daily_limit, minvalue=1)
-        if limit is None or limit == combo.daily_limit:
-            return
-        old_limit = combo.daily_limit
-        combo.daily_limit = limit
-        try:
-            profile_manager.save_profile(self.profile, self._profile_path.name if self._profile_path else None)
-        except Exception as error:
-            combo.daily_limit = old_limit
-            messagebox.showerror("儲存上限失敗", str(error), parent=self._calc_window)
-            return
-        self._update_calc_view()
-
-    def _add_calc_record(self):
-        index = self._calc_choice.current()
-        if not 0 <= index < len(self._calc_combos):
-            return
-        selected = self._calc_tree.selection()
-        if not selected:
-            messagebox.showinfo("提示", "請先選取插入位置的參考紀錄。",
-                                parent=self._calc_window)
-            return
-        before = messagebox.askyesnocancel(
-            "插入位置", "按「是」插入選取紀錄之前；按「否」插入之後。",
-            parent=self._calc_window)
-        if before is None:
-            return
-        items = list(self._calc_tree.get_children())
-        selected_at = items.index(selected[0])
-        neighbor_at = selected_at - 1 if before else selected_at + 1
-        selected_time = datetime.strptime(
-            self._calc_tree.set(selected[0], "timestamp"), "%Y%m%d%H%M%S")
-        if 0 <= neighbor_at < len(items):
-            neighbor_time = datetime.strptime(
-                self._calc_tree.set(items[neighbor_at], "timestamp"), "%Y%m%d%H%M%S")
-            initial_time = selected_time + (neighbor_time - selected_time) / 2
-        else:
-            initial_time = selected_time + timedelta(seconds=-1 if before else 1)
-        timestamp = simpledialog.askstring(
-            "新增計算紀錄", "時間 YYYYMMDDHHMMSS：",
-            initialvalue=initial_time.strftime("%Y%m%d%H%M%S"), parent=self._calc_window)
-        if timestamp is None:
-            return
-        try:
-            when = datetime.strptime(timestamp, "%Y%m%d%H%M%S")
-            if len(timestamp) != 14 or when.strftime("%Y%m%d%H%M%S") != timestamp:
-                raise ValueError()
-        except ValueError:
-            messagebox.showerror("新增失敗", "時間必須是 YYYYMMDDHHMMSS。",
-                                 parent=self._calc_window)
-            return
-        balance = simpledialog.askinteger(
-            "新增計算紀錄", "輸入當時的身上金額：", minvalue=0,
-            parent=self._calc_window)
-        if balance is None:
-            return
-        try:
-            self.background.ledger.add_record(
-                self.profile, self._calc_combos[index], when, balance)
-        except (OSError, ValueError) as error:
-            messagebox.showerror("新增失敗", str(error), parent=self._calc_window)
-            return
-        self._calc_view_key = None
-        self._update_calc_view()
-
-    def _edit_calc_record(self):
-        selected = self._calc_tree.selection()
-        if not selected:
-            messagebox.showinfo("提示", "請先選取一筆計算紀錄。", parent=self._calc_window)
-            return
-        current = int(self._calc_tree.set(selected[0], "balance"))
-        balance = simpledialog.askinteger(
-            "編輯身上金額", "輸入正確的身上金額：", initialvalue=current,
-            minvalue=0, parent=self._calc_window)
-        if balance is None or balance == current:
-            return
-        try:
-            self.background.ledger.edit_balance(int(selected[0]), balance)
-        except (OSError, ValueError) as error:
-            messagebox.showerror("編輯失敗", str(error), parent=self._calc_window)
-            return
-        self._calc_view_key = None
-        self._update_calc_view()
-
-    def _delete_calc_record(self):
-        selected = self._calc_tree.selection()
-        if not selected:
-            messagebox.showinfo("提示", "請先選取一筆計算紀錄。", parent=self._calc_window)
-            return
-        values = self._calc_tree.item(selected[0], "values")
-        if not messagebox.askyesno(
-                "刪除計算紀錄", f"確定刪除 {values[0]}、身上金額 {values[2]} 的紀錄？\n後續變動將重新計算。",
-                parent=self._calc_window):
-            return
-        try:
-            self.background.ledger.delete_record(int(selected[0]))
-        except (OSError, ValueError) as error:
-            messagebox.showerror("刪除失敗", str(error), parent=self._calc_window)
-            return
-        self._calc_view_key = None
-        self._update_calc_view()
-
-    def _reset_calc(self):
-        index = self._calc_choice.current()
-        if not 0 <= index < len(self._calc_combos):
-            return
-        if not self.background.running:
-            messagebox.showinfo("提示", "請先啟動背景偵測，再重設基準。")
-            return
-        combo = self._calc_combos[index]
-        if not combo.enabled or combo.id not in self.background.active_ids:
-            messagebox.showinfo("提示", "此 Combo 未啟用背景偵測，無法重設基準。")
-            return
-        if messagebox.askyesno("重設基準", f"{combo.name} 下一個穩定讀值將作為新基準，既有收入不清除。"):
-            self.background.reset(combo.id)
-
+        if self._statistics_window is not None and self._statistics_window.win.winfo_exists():
+            self._statistics_window.refresh()
     def _load_initial_profile(self):
         profile_manager.init_default_profiles()
         self._refresh_profile_list()
@@ -778,8 +567,20 @@ class App:
         name = simpledialog.askstring("另存 Profile", "輸入新名稱:", parent=self.root)
         if not name:
             return
-        self.profile.name = name
-        self._profile_path = profile_manager.save_profile(self.profile)
+        path = profile_manager.PROFILES_DIR / (name.replace(" ", "_") + ".json")
+        if path.exists():
+            messagebox.showerror("另存失敗", "同名 Profile 已存在。", parent=self.root)
+            return
+        profile = deepcopy(self.profile)
+        profile.name = name
+        profile.id = uuid.uuid4().hex
+        try:
+            saved = profile_manager.save_profile(profile)
+        except OSError as error:
+            messagebox.showerror("另存失敗", str(error), parent=self.root)
+            return
+        self.profile = profile
+        self._profile_path = saved
         self._refresh_hotkeys()
         self._refresh_profile_list()
         paths = profile_manager.list_profiles()
@@ -793,12 +594,22 @@ class App:
         name = simpledialog.askstring("新增 Profile", "輸入名稱:", parent=self.root)
         if not name:
             return
-        self.profile = Profile(name=name)
+        path = profile_manager.PROFILES_DIR / (name.replace(" ", "_") + ".json")
+        if path.exists():
+            messagebox.showerror("新增失敗", "同名 Profile 已存在。", parent=self.root)
+            return
+        profile = Profile(name=name)
+        try:
+            saved = profile_manager.save_profile(profile)
+        except OSError as error:
+            messagebox.showerror("新增失敗", str(error), parent=self.root)
+            return
+        self.profile = profile
+        self._profile_path = saved
         self._background_results.clear()
         self._refresh_hotkeys()
         self._sync_region_to_ui()
         self._refresh_combo_tree()
-        self._profile_path = profile_manager.save_profile(self.profile)
         self._refresh_profile_list()
         paths = profile_manager.list_profiles()
         for i, p in enumerate(paths):
@@ -1286,6 +1097,8 @@ class App:
                 if kind == "background_record" or message != previous:
                     level = "failure" if message.startswith("未取得有效數字") else "info"
                     self._on_log(cid, message, level)
+            elif kind == "background_stat":
+                self._on_log(msg[1], msg[2])
             elif kind == "background_error":
                 messagebox.showerror("背景記帳已停止", msg[1])
             elif kind == "hotkey":
@@ -1620,14 +1433,10 @@ class ComboEditor:
             self.calc_region_vars.append(var)
             ttk.Entry(row, textvariable=var, width=5).pack(side="left")
         ttk.Button(self.frm_calc, text="在螢幕框選數字區域", command=self._select_calc_region).pack(anchor="w")
-        self.var_daily_limit = tk.StringVar(value=str(combo.daily_limit))
         self.var_daily_reset_time = tk.StringVar(value=combo.daily_reset_time)
-        self.var_warning_ratio = tk.StringVar(value=str(combo.warning_ratio * 100))
         self.var_low_confidence_confirmations = tk.StringVar(
             value=str(combo.low_confidence_confirmations))
-        for label, var in (("每日收入上限", self.var_daily_limit),
-                           ("每日重置時間 HH:MM", self.var_daily_reset_time),
-                           ("預警比例 %", self.var_warning_ratio),
+        for label, var in (("OCR 記錄日界線 HH:MM", self.var_daily_reset_time),
                            ("OCR 信心度 0~1", self.var_text_threshold),
                            ("低信心確認次數 2~10", self.var_low_confidence_confirmations)):
             row = ttk.Frame(self.frm_calc)
@@ -1663,9 +1472,7 @@ class ComboEditor:
         candidate = replace(self.combo, name=self.var_name.get().strip() or "新組合",
                             detection_mode="background", image_path=self.var_image.get().strip(),
                             calc_region=tuple(int(v.get()) for v in self.calc_region_vars),
-                            daily_limit=int(self.var_daily_limit.get()),
                             daily_reset_time=self.var_daily_reset_time.get().strip(),
-                            warning_ratio=float(self.var_warning_ratio.get()) / 100,
                             low_confidence_confirmations=int(
                                 self.var_low_confidence_confirmations.get()),
                             text_threshold=float(self.var_text_threshold.get()),
@@ -2342,9 +2149,9 @@ class ComboEditor:
                 candidate = self._calc_settings()
                 if not ScreenCapture().load_template(candidate.image_path):
                     raise ValueError("請設定有效的固定圖示定位圖片。")
-                for name in ("name", "detection_mode", "image_path", "calc_region", "daily_limit",
+                for name in ("name", "detection_mode", "image_path", "calc_region",
                              "daily_reset_time",
-                             "warning_ratio", "low_confidence_confirmations",
+                             "low_confidence_confirmations",
                              "text_threshold", "match_threshold"):
                     setattr(self.combo, name, getattr(candidate, name))
                 self.result = True

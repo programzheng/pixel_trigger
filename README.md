@@ -15,6 +15,7 @@ configurable mouse, keyboard, and sound actions through a Tkinter interface.
 - Restrict capture to a screen region or a selected application window.
 - Save reusable automation profiles as JSON.
 - Record recognized balance changes in daily CSV ledgers.
+- Create independent per-profile statistics from OCR balances or manual income and expenses.
 - Inspect matches with logs, previews, and a click-through debug overlay.
 - Package the application and OCR models for offline Windows use.
 
@@ -69,6 +70,11 @@ uv run python prepare_tesseract.py
 4. Select the action and adjust its confidence and timing settings.
 5. Start or stop detection with the configured global hotkey.
 
+Use **Statistics** to create a manual statistic or select a background OCR combo.
+Choose income, expense, net change, record count, or latest balance, then set its
+period and optional limit. New records are stored under `statistics/`. Existing
+`calc/` CSV files remain untouched and are not included in the new statistics.
+
 Profiles and captured templates are stored locally in `profiles/` and
 `templates/`. Both directories are excluded from version control.
 
@@ -108,6 +114,8 @@ fails.
 | `models.py` | Typed profile, combo, action, and trigger models |
 | `profile_manager.py` | JSON profile persistence |
 | `calc.py` | Background balance recognition and CSV ledger handling |
+| `stat_tracking.py` | Statistics calculations and manual CSV records |
+| `statistics_ui.py` | Statistics window and editor |
 | `window_target.py` | Windows window discovery and client-area targeting |
 | `test_*.py` | Unit and integration-focused regression tests |
 

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import ttkbootstrap as ttk
 import threading
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -13,8 +14,9 @@ import cv2
 from automation import HookEngine
 from calc import BackgroundCalc, FIELDS, LEGACY_FIELDS, Ledger, accounting_day, parse_balance
 from gui import App, ComboEditor, DebugOverlay
-from models import Combo, Profile
+from models import Combo, Profile, Statistic
 from screen_capture import ScreenCapture, _balance_templates, _template_balance
+from statistics_ui import StatisticEditor
 import tkinter as tk
 
 
@@ -176,7 +178,8 @@ class CalcTests(unittest.TestCase):
             events = []
             engine = BackgroundCalc(lambda *event: events.append(event), Ledger(folder))
             combo = Combo(detection_mode="background", calc_region=(0, 0, 4, 4), daily_limit=999)
-            profile = Profile(combos=[combo])
+            profile = Profile(combos=[combo], statistics=[Statistic(source="ocr", combo_id=combo.id,
+                                                                    limit=999)])
             values = iter([324, 324, 1200, 1200, 1300, 1300, 1400, 1400, 1400])
             engine.capture.grab_frame = Mock(return_value=np.zeros((10, 10)))
             engine.capture.read_balance = Mock(side_effect=lambda *args: (v := next(values), str(v), .99, None))
@@ -189,7 +192,7 @@ class CalcTests(unittest.TestCase):
             engine.stop_event.wait = wait
             engine._loop(profile, [combo])
             self.assertEqual([int(row["balance"]) for row in engine.ledger.rows], [324, 1200, 1300, 1400])
-            warnings = [e[2] for e in events if e[0] == "background_record" and "上限" in e[2]]
+            warnings = [e[2] for e in events if e[0] == "background_stat" and "上限" in e[2]]
             self.assertEqual(len(warnings), 2)
             self.assertEqual(engine.ledger.snapshot(profile.id, combo.id, "")[:3], (1076, 0, 1076))
 
@@ -333,7 +336,7 @@ class CalcTests(unittest.TestCase):
             editor._on_detection_mode_change()
             self.assertEqual(editor.frm_params.winfo_manager(), "pack")
             editor.win.destroy()
-            profile = Profile(combos=[combo])
+            profile = Profile(combos=[combo], statistics=[Statistic(source="ocr", combo_id=combo.id)])
             self.assertEqual(Profile.from_dict(profile.to_dict()).to_dict(), profile.to_dict())
             app.background.stop = Mock()
             app.engine._running = True
@@ -342,7 +345,7 @@ class CalcTests(unittest.TestCase):
             app.background.stop.assert_not_called()
             app.profile = profile
             app._show_calc()
-            self.assertIn("900", app._calc_summary.cget("text"))
+            self.assertIn("900", app._statistics_window.summary.cget("text"))
         finally:
             app.on_close()
 
@@ -352,25 +355,75 @@ class CalcTests(unittest.TestCase):
         try:
             app.root.withdraw()
             combo = Combo(detection_mode="background")
-            app.profile = Profile(combos=[combo])
-            other_profile = Profile(combos=[Combo(detection_mode="background", daily_limit=1200)])
+            stat = Statistic(source="ocr", combo_id=combo.id)
+            app.profile = Profile(combos=[combo], statistics=[stat])
+            other_profile = Profile(statistics=[Statistic(limit=1200)])
             app._show_calc()
-            with patch("gui.simpledialog.askinteger", return_value=1100), \
-                    patch("gui.profile_manager.save_profile") as save:
-                app._set_calc_limit()
-            self.assertEqual(combo.daily_limit, 1100)
-            self.assertIn("1100", app._calc_summary.cget("text"))
-            self.assertEqual(Profile.from_dict(app.profile.to_dict()).combos[0].daily_limit, 1100)
-            self.assertEqual(other_profile.combos[0].daily_limit, 1200)
+            with patch("statistics_ui.StatisticEditor", return_value=Mock(result=replace(stat, limit=1100))), \
+                    patch("statistics_ui.profile_manager.save_profile") as save:
+                app._statistics_window._edit_stat()
+            self.assertEqual(app.profile.statistics[0].limit, 1100)
+            self.assertIn("1100", app._statistics_window.summary.cget("text"))
+            self.assertEqual(Profile.from_dict(app.profile.to_dict()).statistics[0].limit, 1100)
+            self.assertEqual(other_profile.statistics[0].limit, 1200)
             save.assert_called_once()
-            with patch("gui.simpledialog.askinteger", return_value=1500), \
-                    patch("gui.profile_manager.save_profile", side_effect=OSError("disk full")), \
-                    patch("gui.messagebox.showerror") as error:
-                app._set_calc_limit()
-            self.assertEqual(combo.daily_limit, 1100)
+            with patch("statistics_ui.StatisticEditor", return_value=Mock(result=replace(stat, limit=1500))), \
+                    patch("statistics_ui.profile_manager.save_profile", side_effect=OSError("disk full")), \
+                    patch("statistics_ui.messagebox.showerror") as error:
+                app._statistics_window._edit_stat()
+            self.assertEqual(app.profile.statistics[0].limit, 1100)
             error.assert_called_once()
         finally:
             app.on_close()
+
+    def test_new_statistic_from_empty_profile_and_editor_rules(self):
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        try:
+            app.root.withdraw()
+            app.profile = Profile()
+            app._show_calc()
+            self.assertIn("尚未建立統計", app._statistics_window.summary.cget("text"))
+            with patch("statistics_ui.StatisticEditor", return_value=Mock(result=Statistic(name="手動收入"))), \
+                    patch("statistics_ui.profile_manager.save_profile"):
+                app._statistics_window._add_stat()
+            self.assertEqual(app.profile.statistics[0].name, "手動收入")
+            self.assertIn("手動收入", app._statistics_window.summary.cget("text"))
+            with patch.object(tk.Toplevel, "wait_window"):
+                editor = StatisticEditor(app.root, app.profile)
+            editor.name.set("每週支出")
+            editor.metric.set("支出")
+            editor.period.set("週")
+            editor.reset_time.set("12:00")
+            editor.limit.set("")
+            editor._save()
+            self.assertEqual((editor.result.metric, editor.result.period,
+                              editor.result.reset_time, editor.result.limit),
+                             ("expense", "week", "12:00", None))
+            combo = Combo(detection_mode="background")
+            with patch.object(tk.Toplevel, "wait_window"):
+                existing = StatisticEditor(app.root, Profile(combos=[combo]),
+                                           Statistic(source="ocr", combo_id=combo.id))
+            self.assertEqual(existing.source_choice.current(), 1)
+            existing.win.destroy()
+        finally:
+            app.on_close()
+
+    def test_save_as_creates_independent_statistic_identity(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(App, "_load_initial_profile"):
+            app = App()
+            try:
+                app.root.withdraw()
+                original = app.profile
+                original.statistics.append(Statistic(name="手動收入"))
+                with patch("gui.profile_manager.PROFILES_DIR", Path(folder)), \
+                        patch("gui.simpledialog.askstring", return_value="copy"):
+                    app._save_profile_as()
+                self.assertNotEqual(app.profile.id, original.id)
+                self.assertEqual(app.profile.statistics[0].id, original.statistics[0].id)
+                self.assertEqual(app._profile_path.name, "copy.json")
+            finally:
+                app.on_close()
 
     def test_single_dialog_saves_all_hotkeys_and_rolls_back_on_failure(self):
         with patch.object(App, "_load_initial_profile"):
@@ -596,12 +649,12 @@ class CalcTests(unittest.TestCase):
         try:
             app.root.withdraw()
             combo = Combo(enabled=False, detection_mode="background")
-            app.profile = Profile(combos=[combo])
+            app.profile = Profile(combos=[combo], statistics=[Statistic(source="ocr", combo_id=combo.id)])
             app._show_calc()
             with patch.object(BackgroundCalc, "running", new_callable=lambda: property(lambda _: True)), patch.object(app.background, "reset") as reset, patch("gui.messagebox.showinfo"):
                 app._update_calc_view()
-                self.assertEqual(str(app._calc_reset.cget("state")), "disabled")
-                app._reset_calc()
+                self.assertEqual(str(app._statistics_window.reset_button.cget("state")), "disabled")
+                app._statistics_window._reset()
                 reset.assert_not_called()
         finally:
             app.on_close()
