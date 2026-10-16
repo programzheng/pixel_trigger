@@ -342,7 +342,33 @@ class CalcTests(unittest.TestCase):
             app.background.stop.assert_not_called()
             app.profile = profile
             app._show_calc()
-            self.assertIn("999", app._calc_summary.cget("text"))
+            self.assertIn("900", app._calc_summary.cget("text"))
+        finally:
+            app.on_close()
+
+    def test_calc_limit_saves_selected_profile_and_rolls_back_on_failure(self):
+        with patch.object(App, "_load_initial_profile"):
+            app = App()
+        try:
+            app.root.withdraw()
+            combo = Combo(detection_mode="background")
+            app.profile = Profile(combos=[combo])
+            other_profile = Profile(combos=[Combo(detection_mode="background", daily_limit=1200)])
+            app._show_calc()
+            with patch("gui.simpledialog.askinteger", return_value=1100), \
+                    patch("gui.profile_manager.save_profile") as save:
+                app._set_calc_limit()
+            self.assertEqual(combo.daily_limit, 1100)
+            self.assertIn("1100", app._calc_summary.cget("text"))
+            self.assertEqual(Profile.from_dict(app.profile.to_dict()).combos[0].daily_limit, 1100)
+            self.assertEqual(other_profile.combos[0].daily_limit, 1200)
+            save.assert_called_once()
+            with patch("gui.simpledialog.askinteger", return_value=1500), \
+                    patch("gui.profile_manager.save_profile", side_effect=OSError("disk full")), \
+                    patch("gui.messagebox.showerror") as error:
+                app._set_calc_limit()
+            self.assertEqual(combo.daily_limit, 1100)
+            error.assert_called_once()
         finally:
             app.on_close()
 
