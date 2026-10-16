@@ -520,6 +520,8 @@ class App:
         ttk.OptionMenu(row, self._calc_period, "Daily", "Daily", "Month", "Years").pack(side="left")
         self._calc_reset = ttk.Button(row, text="重設基準", command=self._reset_calc)
         self._calc_reset.pack(side="left", padx=5)
+        self._calc_limit = ttk.Button(row, text="設定上限", command=self._set_calc_limit)
+        self._calc_limit.pack(side="left")
         ttk.Button(row, text="在選取位置新增", command=self._add_calc_record).pack(side="left")
         ttk.Button(row, text="編輯選取紀錄", command=self._edit_calc_record).pack(side="left")
         ttk.Button(row, text="刪除選取紀錄", command=self._delete_calc_record).pack(side="left", padx=5)
@@ -544,9 +546,11 @@ class App:
         index = self._calc_choice.current()
         if not 0 <= index < len(self._calc_combos):
             self._calc_reset.config(state="disabled")
+            self._calc_limit.config(state="disabled")
             self._calc_summary.config(text="尚未設定背景記帳 Combo。")
             return
         combo = self._calc_combos[index]
+        self._calc_limit.config(state="disabled" if self.background.running else "normal")
         self._calc_reset.config(state="normal" if combo.enabled and self.background.running
                                 and combo.id in self.background.active_ids else "disabled")
         date = self._calc_date.get()
@@ -591,6 +595,25 @@ class App:
                     record["balance"], record["delta"],
                 ))
             self._calc_view_key = key
+
+    def _set_calc_limit(self):
+        index = self._calc_choice.current()
+        if not 0 <= index < len(self._calc_combos) or self.background.running:
+            return
+        combo = self._calc_combos[index]
+        limit = simpledialog.askinteger("設定每日收入上限", "每日收入上限：", parent=self._calc_window,
+                                        initialvalue=combo.daily_limit, minvalue=1)
+        if limit is None or limit == combo.daily_limit:
+            return
+        old_limit = combo.daily_limit
+        combo.daily_limit = limit
+        try:
+            profile_manager.save_profile(self.profile, self._profile_path.name if self._profile_path else None)
+        except Exception as error:
+            combo.daily_limit = old_limit
+            messagebox.showerror("儲存上限失敗", str(error), parent=self._calc_window)
+            return
+        self._update_calc_view()
 
     def _add_calc_record(self):
         index = self._calc_choice.current()
