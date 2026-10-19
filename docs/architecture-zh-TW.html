@@ -381,6 +381,7 @@
       <a class="active" href="#overview">總覽</a>
       <a href="#active">主動偵測</a>
       <a href="#background">背景記帳</a>
+      <a href="#statistics">獨立統計</a>
       <a href="#threads">執行緒邊界</a>
       <a href="#files">模組地圖</a>
     </nav>
@@ -440,11 +441,11 @@
       <section aria-labelledby="background">
         <div class="sec-head" id="background"><span class="sec-index">02</span><h2>背景記帳：獨立的餘額辨識管線</h2></div>
         <p class="section-note"><code>BackgroundCalc</code> 與主動偵測並行但目的不同：它每秒讀取指定 Combo 的餘額，經重複確認後交給 <code>Ledger</code> 寫入每日 CSV。</p>
-        <figure class="background-flow" role="img" aria-label="背景記帳從定位圖示、辨識數字、確認結果到寫入 CSV 與產生統計的四步流程">
+        <figure class="background-flow" role="img" aria-label="背景記帳從定位圖示、辨識數字、確認結果到寫入 CSV 的四步流程">
           <article class="ve-card"><div class="big-num">01</div><h3>定位帳面</h3><p>先以無數字的模板圖片找到餘額區域。</p></article>
           <article class="ve-card"><div class="big-num">02</div><h3>讀取數字</h3><p>優先使用內建數字模板，必要時交給 Tesseract。</p></article>
           <article class="ve-card"><div class="big-num">03</div><h3>抗誤判確認</h3><p>高信心讀值確認 2 次；低信心使用 Combo 設定的次數。</p></article>
-          <article class="ve-card"><div class="big-num">04</div><h3>記錄與告警</h3><p>寫入 <code>statistics/ocr/YYYYMMDD.csv</code>；各 profile 的統計規則獨立計算與提醒。</p></article>
+          <article class="ve-card"><div class="big-num">04</div><h3>記錄餘額</h3><p><code>Ledger</code> 寫入 <code>statistics/ocr/YYYYMMDD.csv</code>，再依目前 Profile 的統計規則檢查提醒。</p></article>
         </figure>
         <div class="legend" aria-label="顏色圖例">
           <span style="--legend:var(--accent)">協調與介面</span>
@@ -454,8 +455,26 @@
         </div>
       </section>
 
+      <section aria-labelledby="statistics">
+        <div class="sec-head" id="statistics"><span class="sec-index">03</span><h2>獨立統計：每個 Profile 自訂規則</h2></div>
+        <p class="section-note"><code>Profile.statistics</code> 儲存各自的統計清單；<code>statistics_ui.py</code> 提供新增、編輯、封存與紀錄管理，<code>stat_tracking.py</code> 依規則計算 OCR 與手動紀錄的結果。</p>
+        <div class="branch-grid">
+          <div class="logic">
+            <article class="ve-card"><h3>資料來源</h3><p>OCR 統計連結一個背景 Combo 的餘額紀錄；手動統計使用 <code>statistics/manual/*.csv</code> 的收支紀錄。</p></article>
+            <article class="ve-card"><h3>統計規則</h3><p>可選收入、支出、淨額、次數或最新餘額，以及日、週、月、年期間；各規則可設定每日重置時間、上限與預警比例。新統計的預設上限為 900。</p></article>
+          </div>
+          <aside class="guardrail">
+            <strong>設定與舊資料</strong>
+            <ul class="compact-list">
+              <li>舊 Profile 沒有統計清單時，會從背景 Combo 建立對應的 OCR 統計設定。</li>
+              <li><code>calc/*.csv</code> 原檔保留；新統計只讀取 <code>statistics/</code> 下的紀錄。</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
       <section aria-labelledby="threads">
-        <div class="sec-head" id="threads"><span class="sec-index">03</span><h2>執行緒邊界：Tkinter 只留在主執行緒</h2></div>
+        <div class="sec-head" id="threads"><span class="sec-index">04</span><h2>執行緒邊界：Tkinter 只留在主執行緒</h2></div>
         <p class="section-note">UI、主動掃描、Combo 判定、持續動作與背景記帳各有清楚邊界；worker 不直接碰 Tkinter，而是回傳輕量訊息。</p>
         <div class="split">
           <div class="threads">
@@ -474,7 +493,7 @@
       </section>
 
       <section aria-labelledby="files">
-        <div class="sec-head" id="files"><span class="sec-index">04</span><h2>模組地圖：平坦結構，各檔案一個責任</h2></div>
+        <div class="sec-head" id="files"><span class="sec-index">05</span><h2>模組地圖：平坦結構，各檔案一個責任</h2></div>
         <p class="section-note">專案刻意維持平坦模組；資料模型是共同語言，GUI 負責協調，視覺與輸入則分開封裝。</p>
         <div class="file-grid">
           <article class="file-card core"><span class="file">main.py</span><h3>程序入口</h3><p>建立 App、註冊熱鍵、進入 Tk 主迴圈。</p></article>
@@ -482,9 +501,11 @@
           <article class="file-card core"><span class="file">automation.py</span><h3>主動偵測引擎</h3><p>掃描排程、觸發狀態、動作執行與取消。</p></article>
           <article class="file-card vision"><span class="file">screen_capture.py</span><h3>視覺能力</h3><p>Pillow ImageGrab 擷取、OpenCV 模板比對、色標 / 色帶與 Tesseract OCR。</p></article>
           <article class="file-card io"><span class="file">input_controller.py</span><h3>輸入輸出</h3><p>透過 PyAutoGUI 發送滑鼠、鍵盤與系統音效。</p></article>
-          <article class="file-card core"><span class="file">models.py</span><h3>領域資料</h3><p><code>Profile</code>、<code>Combo</code>、<code>Action</code> 與 Enum 的序列化規則。</p></article>
+          <article class="file-card core"><span class="file">models.py</span><h3>領域資料</h3><p><code>Profile</code>、<code>Combo</code>、<code>Statistic</code>、<code>Action</code> 與 Enum 的序列化規則。</p></article>
           <article class="file-card io"><span class="file">profile_manager.py</span><h3>設定持久化</h3><p>將 Profile 讀寫為 <code>profiles/*.json</code>，管理模板目錄。</p></article>
           <article class="file-card io"><span class="file">calc.py</span><h3>背景記帳</h3><p>餘額辨識協調、每日會計日與 CSV Ledger。</p></article>
+          <article class="file-card io"><span class="file">stat_tracking.py</span><h3>統計計算</h3><p>依期間與重置時間計算規則結果，管理手動紀錄 CSV。</p></article>
+          <article class="file-card core"><span class="file">statistics_ui.py</span><h3>統計介面</h3><p>統計規則編輯、查詢、封存與紀錄操作。</p></article>
           <article class="file-card io"><span class="file">window_target.py</span><h3>Windows 視窗</h3><p>以 ctypes 列舉視窗，解析有效的 client-area 螢幕座標。</p></article>
         </div>
 
