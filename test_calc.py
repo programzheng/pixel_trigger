@@ -376,6 +376,46 @@ class CalcTests(unittest.TestCase):
         finally:
             app.on_close()
 
+    def test_ocr_records_remain_editable_during_background_detection(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(App, "_load_initial_profile"):
+            app = App()
+            try:
+                app.root.withdraw()
+                combo = Combo(detection_mode="background")
+                app.profile = Profile(combos=[combo], statistics=[Statistic(source="ocr", combo_id=combo.id)])
+                app.background.ledger = Ledger(folder)
+                when = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+                app.background.ledger.record(app.profile, combo, 100, "100", .9, when)
+                app._show_calc()
+                window = app._statistics_window
+                app.background.thread = Mock()
+                app.background.thread.is_alive.return_value = True
+                window.refresh(force=True)
+                self.assertEqual(str(window.add_button.cget("state")), "normal")
+                self.assertEqual(str(window.record_edit_button.cget("state")), "normal")
+                self.assertEqual(str(window.record_delete_button.cget("state")), "normal")
+                self.assertEqual(str(window.edit_button.cget("state")), "disabled")
+                self.assertIn("紀錄可直接新增", window.summary.cget("text"))
+
+                later = when.replace(minute=1)
+                with patch("statistics_ui.simpledialog.askstring", return_value=later.strftime("%Y%m%d%H%M%S")), \
+                        patch("statistics_ui.simpledialog.askinteger", return_value=140):
+                    window._add_record()
+                self.assertEqual([row["balance"] for row in app.background.ledger.rows], ["100", "140"])
+
+                window.tree.selection_set("o:1")
+                with patch("statistics_ui.simpledialog.askinteger", return_value=130):
+                    window._edit_record()
+                self.assertEqual(app.background.ledger.rows[1]["balance"], "130")
+
+                window.tree.selection_set("o:1")
+                with patch("statistics_ui.messagebox.askyesno", return_value=True):
+                    window._delete_record()
+                self.assertEqual([row["balance"] for row in app.background.ledger.rows], ["100"])
+            finally:
+                app.background.thread = None
+                app.on_close()
+
     def test_new_statistic_from_empty_profile_and_editor_rules(self):
         with patch.object(App, "_load_initial_profile"):
             app = App()

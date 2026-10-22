@@ -227,7 +227,8 @@ class StatisticsWindow:
         busy = self.app.background.running
         self.add_stat_button.config(state="disabled" if busy else "normal")
         if stat is None:
-            self.summary.config(text="尚未建立統計。請按「新增統計」。")
+            self.summary.config(text="尚未建立統計。" + ("請先停止背景偵測，再新增統計。" if busy
+                                                     else "請按「新增統計」。"))
             self.tree.delete(*self.tree.get_children())
             for button in (self.edit_button, self.archive_button, self.add_button,
                            self.record_edit_button, self.record_delete_button, self.reset_button):
@@ -261,13 +262,15 @@ class StatisticsWindow:
         source = "手動" if stat.source == "manual" else (combo.name if combo else "已刪除 Combo")
         self.summary.config(text=f"{stat.name}　{METRICS[stat.metric]}：{value if value is not None else '—'}"
                                  f"　期間：{PERIODS[stat.period]}　來源：{source}\n"
-                                 f"上限：{stat.limit if stat.limit is not None else '未設定'}　狀態：{state}")
+                                 f"上限：{stat.limit if stat.limit is not None else '未設定'}　狀態：{state}"
+                                 + ("\n背景偵測執行中：紀錄可直接新增、編輯或刪除；統計設定需停止後修改。"
+                                    if busy else ""))
         self.edit_button.config(state="disabled" if busy else "normal")
         self.archive_button.config(state="disabled" if busy or stat.archived else "normal")
         self.add_button.config(state="disabled" if not stat.enabled or stat.archived
-                               or (stat.source == "ocr" and (busy or combo is None)) else "normal")
-        self.record_edit_button.config(state="disabled" if stat.archived or (stat.source == "ocr" and busy) else "normal")
-        self.record_delete_button.config(state="disabled" if stat.archived or (stat.source == "ocr" and busy) else "normal")
+                               or (stat.source == "ocr" and combo is None) else "normal")
+        self.record_edit_button.config(state="disabled" if stat.archived else "normal")
+        self.record_delete_button.config(state="disabled" if stat.archived else "normal")
         self.reset_button.config(state="normal" if stat.source == "ocr" and stat.enabled and not stat.archived
                                  and combo and busy
                                  and combo.enabled and combo.id in self.app.background.active_ids else "disabled")
@@ -307,7 +310,7 @@ class StatisticsWindow:
         if stat is None or stat.archived or not stat.enabled:
             return
         combo = self._source_combo(stat)
-        if stat.source == "ocr" and (self.app.background.running or combo is None):
+        if stat.source == "ocr" and combo is None:
             return
         when = self._record_time(stat)
         if when is None:
@@ -347,7 +350,10 @@ class StatisticsWindow:
     def _edit_record(self):
         selected = self.tree.selection()
         stat = self._selected()
-        if not selected or stat is None or stat.archived:
+        if stat is None or stat.archived:
+            return
+        if not selected:
+            messagebox.showinfo("編輯紀錄", "請先選取一筆紀錄。", parent=self.win)
             return
         record_id = selected[0][2:]
         try:
@@ -362,8 +368,6 @@ class StatisticsWindow:
                     return
                 self.manual.edit(record_id, "income" if income else "expense", amount)
             else:
-                if self.app.background.running:
-                    return
                 amount = simpledialog.askinteger("編輯 OCR 紀錄", "當時餘額：", minvalue=0,
                                                  initialvalue=int(self.tree.set(selected[0], "balance")),
                                                  parent=self.win)
@@ -377,13 +381,18 @@ class StatisticsWindow:
     def _delete_record(self):
         selected = self.tree.selection()
         stat = self._selected()
-        if not selected or stat is None or stat.archived or not messagebox.askyesno(
+        if stat is None or stat.archived:
+            return
+        if not selected:
+            messagebox.showinfo("刪除紀錄", "請先選取一筆紀錄。", parent=self.win)
+            return
+        if not messagebox.askyesno(
                 "刪除紀錄", "確定刪除選取的紀錄？後續金額變動將重新計算。", parent=self.win):
             return
         try:
             if stat.source == "manual":
                 self.manual.delete(selected[0][2:])
-            elif not self.app.background.running:
+            else:
                 self.app.background.ledger.delete_record(int(selected[0][2:]))
         except (OSError, ValueError) as error:
             messagebox.showerror("刪除紀錄失敗", str(error), parent=self.win)
