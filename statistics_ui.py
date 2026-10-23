@@ -158,7 +158,9 @@ class StatisticsWindow:
 
     def _set_choices(self, selected_id=None):
         stats = self.app.profile.statistics
-        self.choice.config(values=[f"{s.name} [{s.id[:8]}]{'（已封存）' if s.archived else ''}" for s in stats])
+        names = [stat.name for stat in stats]
+        self.choice.config(values=[f"{stat.name}{f' [{stat.id[:8]}]' if names.count(stat.name) > 1 else ''}"
+                                   f"{'（已封存）' if stat.archived else ''}" for stat in stats])
         index = next((i for i, stat in enumerate(stats) if stat.id == selected_id), 0)
         if stats:
             self.choice.current(index)

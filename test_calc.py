@@ -336,7 +336,8 @@ class CalcTests(unittest.TestCase):
             editor._on_detection_mode_change()
             self.assertEqual(editor.frm_params.winfo_manager(), "pack")
             editor.win.destroy()
-            profile = Profile(combos=[combo], statistics=[Statistic(source="ocr", combo_id=combo.id)])
+            profile = Profile(combos=[combo], statistics=[Statistic(
+                id=f"legacy-{combo.id}", name=combo.name, source="ocr", combo_id=combo.id)])
             self.assertEqual(Profile.from_dict(profile.to_dict()).to_dict(), profile.to_dict())
             app.background.stop = Mock()
             app.engine._running = True
@@ -346,6 +347,10 @@ class CalcTests(unittest.TestCase):
             app.profile = profile
             app._show_calc()
             self.assertIn("900", app._statistics_window.summary.cget("text"))
+            self.assertEqual(app._statistics_window.choice.get(), combo.name)
+            profile.statistics.append(Statistic(name=combo.name))
+            app._statistics_window._set_choices()
+            self.assertIn("legacy-", app._statistics_window.choice.get())
         finally:
             app.on_close()
 
