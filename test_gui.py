@@ -17,6 +17,8 @@ from gui import (
     _saved_window_geometry,
     _system_theme,
 )
+from localization import get_language, set_language, tr
+from statistics_ui import StatisticEditor, StatisticsWindow
 from models import Action, ActionType, Combo, PositionControl, Profile, TriggerMode
 
 
@@ -24,6 +26,53 @@ class ComboScaleDisplayTest(unittest.TestCase):
     def test_app_title_uses_project_version(self):
         with patch("gui.tomllib.load", return_value={"project": {"version": "1.2.3"}}):
             self.assertEqual(_app_title(), "PixelTrigger v1.2.3")
+
+    def test_english_language_loads_and_saves_without_losing_window_settings(self):
+        settings = {"language": "en", "window": {"width": 900, "height": 700,
+                                               "x": 0, "y": 0}}
+        with patch("gui.load_app_settings", return_value=settings), \
+                patch("gui.save_app_settings") as save, \
+                patch.object(App, "_load_initial_profile"), \
+                patch("gui.messagebox.showinfo"):
+            app = App()
+            try:
+                self.assertEqual(get_language(), "en")
+                self.assertEqual(app.tree.heading("action")["text"], "Action")
+                self.assertEqual(app.btn_toggle.cget("text"), "Start active detection")
+                app.btn_theme.invoke()
+                self.assertEqual(app.btn_theme.cget("text"), "Light theme")
+                with patch.object(tk.Toplevel, "wait_window"):
+                    editor = ComboEditor(app.root, Combo())
+                self.assertEqual(editor.win.title(), "Edit Combo")
+                self.assertEqual(editor.lbl_image.cget("text"), "Trigger image:")
+                editor.win.destroy()
+                with patch("statistics_ui.ManualLedger.load"):
+                    statistics = StatisticsWindow(app)
+                self.assertEqual(statistics.win.title(), "Statistics")
+                self.assertEqual(statistics.add_stat_button.cget("text"), "Add statistic")
+                statistics.win.destroy()
+                with patch.object(tk.Toplevel, "wait_window"):
+                    stat_editor = StatisticEditor(app.root, app.profile)
+                stat_editor.name.set("Salary")
+                stat_editor.metric.set("Expense")
+                stat_editor.period.set("Week")
+                stat_editor._save()
+                self.assertEqual((stat_editor.result.metric, stat_editor.result.period),
+                                 ("expense", "week"))
+                combo = Combo(name="Balance", detection_mode="background")
+                app.profile.combos.append(combo)
+                app._refresh_combo_tree()
+                app._msg_queue.append(("background_read", combo.id,
+                                       tr("餘額 {value}").format(value=324)))
+                app._poll_queue()
+                self.assertEqual(app.tree.set(combo.id, "status"), "Balance 324")
+                app.cmb_language.current(0)
+                app._change_language()
+                self.assertEqual(save.call_args.args[0]["window"], settings["window"])
+                self.assertEqual(save.call_args.args[0]["language"], "zh-TW")
+            finally:
+                app.on_close()
+                set_language("zh-TW")
 
     def setUp(self):
         # Each test owns a new Tcl interpreter; styles cannot cross roots.

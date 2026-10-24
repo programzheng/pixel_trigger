@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 import input_controller
+from localization import tr
 from models import ActionType, Combo, Profile, TriggerMode
 from screen_capture import ScreenCapture, find_color_marker, color_band_state
 from window_target import get_window_region, list_windows
@@ -62,7 +63,7 @@ class HookEngine:
         if previous and previous[0] == reason and now - previous[1] < 1:
             return
         self._last_logs[key] = (reason, now)
-        self._on_log(combo.id, f"[{combo.trigger.value}] {reason} {detail}".rstrip(), level)
+        self._on_log(combo.id, f"[{combo.trigger.value}] {tr(reason)} {tr(detail)}".rstrip(), level)
 
     @property
     def running(self) -> bool:
@@ -317,7 +318,7 @@ class HookEngine:
             match_ms = (time.perf_counter() - match_started) * 1000
             if match_ms >= 50:
                 mode = "上次位置" if previous_rect is not None else "全畫面"
-                self._log(combo, "圖片比對耗時", f"{match_ms:.0f} ms，{mode}",
+                self._log(combo, "圖片比對耗時", f"{match_ms:.0f} ms{tr('，')}{tr(mode)}",
                           category="match_timing")
             reason = "圖片通過" if found else "圖片定位未通過"
 
@@ -366,13 +367,15 @@ class HookEngine:
                 self._visible_rects[combo.id] = match_rect
             else:
                 self._visible_rects.pop(combo.id, None)
-        detail = f"圖片分數={confidence:.6f}／閾值={combo.match_threshold:.6f}" if combo.image_path else ""
+        detail = (tr("圖片分數={score:.6f}／閾值={threshold:.6f}").format(
+            score=confidence, threshold=combo.match_threshold) if combo.image_path else "")
         if combo.verify_text:
-            detail += f" OCR分數={text_conf:.3f}／閾值={combo.text_threshold:.3f} 文字模式={combo.text_match_mode.value}"
+            detail += tr(" OCR分數={score:.3f}／閾值={threshold:.3f} 文字模式={mode}").format(
+                score=text_conf, threshold=combo.text_threshold, mode=combo.text_match_mode.value)
         if found and combo.trigger == TriggerMode.ON_APPEAR:
-            detail += "；已持續可見，等待消失再觸發" if was_visible else "；首次出現，觸發動作"
+            detail += tr("；已持續可見，等待消失再觸發" if was_visible else "；首次出現，觸發動作")
         elif combo.trigger == TriggerMode.WHILE_VISIBLE:
-            detail += "；條件成立，持續動作" if found else "；條件失效，停止動作"
+            detail += tr("；條件成立，持續動作" if found else "；條件失效，停止動作")
         self._log(combo, reason, detail, level="info" if found else "failure")
 
         # Debug callback — 每個週期都回報
@@ -535,7 +538,9 @@ class HookEngine:
             scale_limit=1, stop_event=stop_event,
         )
         self._log(combo, "點擊目標圖片通過" if found else "點擊目標圖片未通過",
-                  f"分數={_confidence:.6f}／閾值={action.target_threshold:.6f}", category="target", level="info" if found else "failure")
+                  tr("分數={score:.6f}／閾值={threshold:.6f}").format(
+                      score=_confidence, threshold=action.target_threshold),
+                  category="target", level="info" if found else "failure")
         if (not found or pos is None or stop_event.is_set() or self._stop_event.is_set()
                 or self._scan_region() != region):
             return
@@ -641,7 +646,8 @@ class HookEngine:
 
     def _log_click_rate(self, combo, count, elapsed):
         self._log(combo, "連點發送統計",
-                  f"{count / elapsed:.1f} 次/秒；{count} 次／{elapsed:.3f} 秒（非遊戲接收量）",
+                  tr("{rate:.1f} 次/秒；{count} 次／{elapsed:.3f} 秒（非遊戲接收量）").format(
+                      rate=count / elapsed, count=count, elapsed=elapsed),
                   category="click_rate")
 
     def _repeat_action(self, combo: Combo, stop_event: threading.Event):
@@ -697,7 +703,8 @@ class HookEngine:
                               category="position_timing")
                 marker = find_color_marker(frame, settings)
                 score = self._capture.get_position_confidence()
-                detail = f"定位分數={score:.6f}／閾值={combo.match_threshold:.6f}"
+                detail = tr("定位分數={score:.6f}／閾值={threshold:.6f}").format(
+                    score=score, threshold=combo.match_threshold)
                 reason = ""
                 if frame is None:
                     reason = "圖片定位未通過" if score < combo.match_threshold else "追蹤區域無法擷取"
@@ -719,26 +726,30 @@ class HookEngine:
                     else:
                         missing_since = None
                     if ratio is None:
-                        reason = reason or "有效色帶取樣不足"
+                        reason = tr(reason or "有效色帶取樣不足")
                         if should_run:
-                            reason += "；漏判容忍中"
+                            reason += tr("；漏判容忍中")
                             remaining = max(0, settings.band_missing_ms - (now - missing_since) * 1000)
-                            detail += f"；漏判容忍中，維持動作，剩餘約 {remaining:.0f} ms"
+                            detail += tr("；漏判容忍中，維持動作，剩餘約 {remaining:.0f} ms").format(
+                                remaining=remaining)
                         else:
-                            reason += "；停止／等待"
-                            detail += "；停止／等待，漏判不能啟動動作"
+                            reason += tr("；停止／等待")
+                            detail += tr("；停止／等待，漏判不能啟動動作")
                     else:
                         reason = ("色帶達啟動比例" if not active and detected else
                                   "色帶未達啟動比例" if not active else
                                   "色帶維持執行" if detected else "色帶達停止比例")
-                        detail += f" 色帶={ratio:.3f}／啟動={settings.band_start:.3f}／停止={settings.band_stop:.3f}"
+                        detail += tr(" 色帶={ratio:.3f}／啟動={start:.3f}／停止={stop:.3f}").format(
+                            ratio=ratio, start=settings.band_start, stop=settings.band_stop)
                 elif position is None or position >= settings.release_at:
                     should_run = False
                 elif position <= settings.press_at:
                     should_run = True
                 if combo.trigger == TriggerMode.POSITION_CONTROL and marker:
                     reason = "位置啟動" if position <= settings.press_at else "位置停止" if position >= settings.release_at else "位置在界線間，維持原狀"
-                    detail += f" 位置={position:.1%}／啟動={settings.press_at:.1%}／停止={settings.release_at:.1%}；{'執行' if should_run else '等待'}"
+                    detail += tr(" 位置={position:.1%}／啟動={start:.1%}／停止={stop:.1%}；{state}").format(
+                        position=position, start=settings.press_at, stop=settings.release_at,
+                        state=tr("執行" if should_run else "等待"))
                 self._log(combo, reason, detail, level="info" if (detected if combo.trigger == TriggerMode.COLOR_BAND else marker is not None) else "failure")
                 if self._stop_event.is_set() or stop_event.is_set():
                     break
