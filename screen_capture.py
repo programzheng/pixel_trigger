@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 from PIL import ImageGrab
 
+from localization import tr
 from models import Combo, PositionControl
 
 
@@ -522,7 +523,7 @@ class ScreenCapture:
             match_frame, combo.image_path, combo.match_threshold, region)
         self._match_state.balance_debug = (found, score, None, None)
         if not found or pos is None:
-            return None, "找不到定位圖片", 0.0, None
+            return None, tr("找不到定位圖片"), 0.0, None
         mw, mh = self.get_match_size(combo.image_path)
         tw, th = self.get_template_size(combo.image_path)
         dx, dy, width, height = combo.calc_region
@@ -536,7 +537,7 @@ class ScreenCapture:
             (x + ox, y + oy, width, height),
         )
         if x < 0 or y < 0 or x + width > frame.shape[1] or y + height > frame.shape[0]:
-            return None, "數字區域超出擷取範圍", 0.0, None
+            return None, tr("數字區域超出擷取範圍"), 0.0, None
         roi = frame[y:y + height, x:x + width]
         if roi.ndim == 3:
             hsv = cv2.cvtColor(roi[:, :, :3], cv2.COLOR_RGB2HSV)
@@ -559,7 +560,7 @@ class ScreenCapture:
                     result = None
         text, confidence = result or ("", 0.0)
         if result is None or confidence < combo.text_threshold:
-            return None, text or "OCR 無有效數字", confidence, roi
+            return None, text or tr("OCR 無有效數字"), confidence, roi
         try:
             value = parse_balance(text)
         except ValueError:

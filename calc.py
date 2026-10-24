@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from localization import tr
 from profile_manager import PROFILES_DIR
 from screen_capture import ScreenCapture
 from window_target import capture_region, get_window_region
@@ -68,7 +69,7 @@ class Ledger:
                 with path.open(encoding="utf-8-sig", newline="") as stream:
                     reader = csv.DictReader(stream)
                     if reader.fieldnames not in (FIELDS, LEGACY_FIELDS):
-                        raise ValueError(f"CSV 欄位毀損：{path.name}")
+                        raise ValueError(tr("CSV 欄位毀損：{name}").format(name=path.name))
                     legacy = reader.fieldnames == LEGACY_FIELDS
                     for row in reader:
                         try:
@@ -102,7 +103,8 @@ class Ledger:
                             if row["record_type"] == "change" and daily_previous is None:
                                 migrate = True
                         except (ValueError, TypeError, KeyError):
-                            raise ValueError(f"CSV 紀錄毀損：{path.name} 第 {reader.line_num} 行") from None
+                            raise ValueError(tr("CSV 紀錄毀損：{name} 第 {line} 行").format(
+                                name=path.name, line=reader.line_num)) from None
                         rows.append(row)
                         last[key] = balance
                         daily_last[daily_key] = balance
@@ -260,7 +262,7 @@ class BackgroundCalc:
         for combo in combos:
             validate_combo(combo)
             if not self.capture.load_template(combo.image_path):
-                raise ValueError(f"{combo.name}：請設定不含數字的定位圖片。")
+                raise ValueError(f"{combo.name}{tr('：請設定不含數字的定位圖片。')}")
         capture_region(profile)
         self.ledger.load(profile)
         # Freeze identity/settings so a cancelled OCR cannot follow later UI edits.
@@ -304,16 +306,16 @@ class BackgroundCalc:
                 region = capture_region(profile)
                 if profile.window_title and region is None:
                     pending.clear()
-                    self._notify("background_status", "目標視窗不可用，背景暫停讀取")
+                    self._notify("background_status", tr("目標視窗不可用，背景暫停讀取"))
                     self.stop_event.wait(1)
                     continue
                 frame = self.capture.grab_frame(region, color=True)
                 captured_at = datetime.now()
                 if frame is None:
                     pending.clear()
-                    self._notify("background_status", "截圖失敗，等待重試")
+                    self._notify("background_status", tr("截圖失敗，等待重試"))
                 else:
-                    self._notify("background_status", "背景偵測中")
+                    self._notify("background_status", tr("背景偵測中"))
                     for combo in combos:
                         if self.stop_event.is_set():
                             break
@@ -331,7 +333,8 @@ class BackgroundCalc:
                             try:
                                 value = parse_balance(text)
                             except ValueError:
-                                self._notify("background_read", combo.id, f"未取得有效數字：{text}")
+                                self._notify("background_read", combo.id,
+                                             tr("未取得有效數字：{text}").format(text=text))
                                 continue
                         previous, confirmations = pending.get(combo.id, (None, 0))
                         confirmations = confirmations + 1 if previous == value else 1
@@ -340,11 +343,14 @@ class BackgroundCalc:
                                     else combo.low_confidence_confirmations)
                         if confirmations < required:
                             self._notify("background_read", combo.id,
-                                         f"讀到 {value}，等待再次確認 {confirmations}/{required}")
+                                         tr("讀到 {value}，等待再次確認 {confirmations}/{required}").format(
+                                             value=value, confirmations=confirmations, required=required))
                             continue
                         row = self.accept(profile, combo, value, text, confidence, now)
                         if row:
-                            self._notify("background_record", combo.id, f"餘額 {value}，變動 {int(row['delta']):+d}")
+                            self._notify("background_record", combo.id,
+                                         tr("餘額 {value}，變動 {delta:+d}").format(
+                                             value=value, delta=int(row["delta"])))
                             with self.ledger.lock:
                                 records = list(self.ledger.rows)
                             for stat in profile.statistics:
@@ -359,14 +365,15 @@ class BackgroundCalc:
                                 level = crossing_level(stat, before, after)
                                 if level:
                                     self._notify("background_stat", combo.id,
-                                                 f"{stat.name} {level}：{after}/{stat.limit}")
-                        self._notify("background_read", combo.id, f"餘額 {value}")
+                                                 f"{stat.name} {tr(level)}{tr('：')}{after}/{stat.limit}")
+                        self._notify("background_read", combo.id,
+                                     tr("餘額 {value}").format(value=value))
                 self.stop_event.wait(1)
         except Exception as error:
             self._notify("background_error", str(error))
         finally:
             self.stop_event.set()
-            self.notify("background_status", "背景偵測已停止")
+            self.notify("background_status", tr("背景偵測已停止"))
 
     def _notify(self, *message):
         if not self.stop_event.is_set():

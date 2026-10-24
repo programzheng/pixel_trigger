@@ -12,6 +12,8 @@ from collections.abc import Callable
 
 import pyautogui
 
+from localization import tr
+
 pyautogui.PAUSE = 0
 
 
@@ -88,7 +90,7 @@ def mouse_rapid_click(
     if (button not in _CLICK_FLAGS
             or any(not math.isfinite(v) or v < 0 for v in (duration, interval_min, interval_max))
             or interval_min > interval_max):
-        raise ValueError("連點按鍵、持續時間或間隔不合法。")
+        raise ValueError(tr("連點按鍵、持續時間或間隔不合法。"))
     inputs = (_Input * 2)(*(_Input(type=0, mi=_MouseInput(dwFlags=flag))
                             for flag in _CLICK_FLAGS[button]))
     sample_start = time.perf_counter()
@@ -107,7 +109,7 @@ def mouse_rapid_click(
                 error = ctypes.get_last_error()
                 if sent:
                     release_mouse(button)  # Partial insertion may leave the button down.
-                raise OSError(error, f"SendInput 只送出 {sent}/2 個事件；請檢查目標視窗權限。")
+                raise OSError(error, tr("SendInput 只送出 {sent}/2 個事件；請檢查目標視窗權限。").format(sent=sent))
             count += 1
             now = time.perf_counter()
             if on_rate is not None and now - sample_start >= 1:

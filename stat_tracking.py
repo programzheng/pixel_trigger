@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from calc import accounting_day
+from localization import tr
 from models import Statistic
 from profile_manager import PROFILES_DIR
 
@@ -86,7 +87,7 @@ class ManualLedger:
             with path.open(encoding="utf-8-sig", newline="") as stream:
                 reader = csv.DictReader(stream)
                 if reader.fieldnames != MANUAL_FIELDS:
-                    raise ValueError(f"手動統計 CSV 欄位毀損：{path.name}")
+                    raise ValueError(tr("手動統計 CSV 欄位毀損：{name}").format(name=path.name))
                 for row in reader:
                     try:
                         stamp = datetime.strptime(row["timestamp"], "%Y%m%d%H%M%S")
@@ -98,7 +99,8 @@ class ManualLedger:
                                 or int(row["amount"]) < 1):
                             raise ValueError()
                     except (ValueError, TypeError, KeyError):
-                        raise ValueError(f"手動統計 CSV 紀錄毀損：{path.name} 第 {reader.line_num} 行") from None
+                        raise ValueError(tr("手動統計 CSV 紀錄毀損：{name} 第 {line} 行").format(
+                            name=path.name, line=reader.line_num)) from None
                     rows.append(row)
                     seen.add(row["id"])
         self.rows = rows

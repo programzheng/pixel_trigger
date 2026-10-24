@@ -14,6 +14,7 @@ configurable mouse, keyboard, and sound actions through a Tkinter interface.
 - Trigger clicks, key presses, holds, rapid input, or sound alerts.
 - Restrict capture to a screen region or a selected application window.
 - Save reusable automation profiles as JSON.
+- Choose a Traditional Chinese or English interface language.
 - Record recognized balance changes in daily CSV ledgers.
 - Create independent per-profile statistics from OCR balances or manual income and expenses.
 - Inspect matches with logs, previews, and a click-through debug overlay.
@@ -70,6 +71,10 @@ uv run python prepare_tesseract.py
 4. Select the action and adjust its confidence and timing settings.
 5. Start or stop detection with the configured global hotkey.
 
+Choose **繁體中文** or **English** from the language selector in the top row.
+The choice is saved for the next launch; restart the app to apply it. Profiles
+and automation settings are shared between languages.
+
 Use **Statistics** to create a manual statistic or select a background OCR combo.
 Choose income, expense, net change, record count, or latest balance, then set its
 period and optional limit. New records are stored under `statistics/`. Existing
@@ -108,6 +113,7 @@ fails.
 | Path | Purpose |
 | --- | --- |
 | `gui.py` | Tkinter interface, editors, selectors, and debug overlay |
+| `localization.py` | Traditional Chinese and English interface text |
 | `automation.py` | Detection loop, trigger state, and action scheduling |
 | `screen_capture.py` | Screen capture, template matching, OCR, and color detection |
 | `input_controller.py` | Interruptible mouse, keyboard, and sound actions |
