@@ -269,6 +269,21 @@ class CalcTests(unittest.TestCase):
         self.assertEqual(capture.read_balance(combo, frame)[0], 795)
         capture._tesseract_balance.assert_called_once()
 
+    def test_blank_balance_region_does_not_hallucinate_four(self):
+        combo = Combo(image_path="icon", calc_region=(0, 0, 4, 4))
+        capture = ScreenCapture()
+        capture.match_template = Mock(return_value=(True, 1, (2, 2)))
+        capture.get_match_size = Mock(return_value=(4, 4))
+        capture.get_template_size = Mock(return_value=(4, 4))
+        capture._tesseract_balance = Mock(return_value=("4", .99))
+
+        for color in ((30, 30, 30), (255, 255, 255)):
+            frame = np.full((4, 4, 3), color, dtype=np.uint8)
+            value, text, confidence, _ = capture.read_balance(combo, frame)
+            self.assertIsNone(value)
+            self.assertEqual(confidence, 0)
+        capture._tesseract_balance.assert_not_called()
+
     def test_fixed_digit_templates_read_scaled_balance(self):
         templates = _balance_templates()
         separator = np.zeros((32, 3), dtype=np.uint8)

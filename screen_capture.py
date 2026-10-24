@@ -541,6 +541,8 @@ class ScreenCapture:
         if roi.ndim == 3:
             hsv = cv2.cvtColor(roi[:, :, :3], cv2.COLOR_RGB2HSV)
             digits = cv2.inRange(hsv, np.array((0, 0, 170)), np.array((179, 30, 255)))
+            if not np.any(digits) or np.all(digits):
+                return None, "數字區域沒有可辨識的數字", 0.0, roi
             enlarged = cv2.resize(
                 digits, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
         else:
