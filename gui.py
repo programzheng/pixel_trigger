@@ -27,7 +27,7 @@ import numpy as np
 from PIL import Image, ImageGrab, ImageTk
 
 from app_settings import load_app_settings, save_app_settings
-from localization import get_language, set_language, tr
+from localization import ENGLISH, get_language, set_language, tr
 import profile_manager
 from window_target import capture_region, list_windows
 from automation import HookEngine
@@ -207,6 +207,7 @@ class App:
         self._hotkeys = []
         self._hotkeys_enabled = False
         self._statistics_window = None
+        self._last_cycle_count = 0
         self._closing = False
 
         self._build_ui()
@@ -357,7 +358,8 @@ class App:
 
     def _change_language(self, _event=None):
         language = "en" if self.cmb_language.current() == 1 else "zh-TW"
-        if language == get_language():
+        previous = get_language()
+        if language == previous:
             return
         settings = load_app_settings()
         settings["language"] = language
@@ -367,9 +369,59 @@ class App:
             messagebox.showerror("Language / 語言", str(error), parent=self.root)
             self.cmb_language.current(1 if get_language() == "en" else 0)
             return
-        # shortcut: language changes apply on restart; rebuild open dialogs if live switching is needed.
-        messagebox.showinfo("Language / 語言", "Restart the app to apply the language. / 重新啟動程式以套用語言。",
-                            parent=self.root)
+        set_language(language)
+        old_text = {value: key for key, value in ENGLISH.items()} if previous == "en" else {}
+
+        def translated(value):
+            return tr(old_text.get(value, value))
+
+        def update_widgets(widget):
+            if isinstance(widget, tk.Toplevel):
+                title = widget.title()
+                old_suffix = ENGLISH[" — 第三方授權"] if previous == "en" else " — 第三方授權"
+                if title == self.root.title() + old_suffix:
+                    widget.title(self.root.title() + tr(" — 第三方授權"))
+                else:
+                    widget.title(translated(title))
+            if "text" in widget.keys():
+                current = widget.cget("text")
+                updated = translated(current)
+                if updated != current:
+                    widget.configure(text=updated)
+            if isinstance(widget, ttk.Treeview):
+                for column in widget["columns"]:
+                    current = widget.heading(column)["text"]
+                    widget.heading(column, text=translated(current))
+            for child in widget.winfo_children():
+                update_widgets(child)
+
+        update_widgets(self.root)
+        self.btn_theme.config(text=tr("切換亮色" if self.root.style.theme.name == "darkly" else "切換深色"))
+        self.btn_toggle.config(text=tr("停止主動偵測" if self.engine.running else "啟動主動偵測"))
+        self.btn_background.config(text=tr("停止背景偵測" if self.background.running else "啟動背景偵測"))
+        self.lbl_cycles.config(text=(f"Active scans: {self._last_cycle_count}" if language == "en"
+                                     else f"主動掃描: {self._last_cycle_count} 次"))
+        self._refresh_hotkeys(register=False)
+        self._refresh_windows()
+        for combo in self.profile.combos:
+            if self.tree.exists(combo.id):
+                trigger = (tr("背景：金額記帳") if combo.detection_mode == "background"
+                           else tr("主動：") + tr(TRIGGER_LABELS.get(combo.trigger, "?")))
+                action = (tr("OCR 金額記錄") if combo.detection_mode == "background"
+                          else self._action_summary(combo.action))
+                self.tree.set(combo.id, "trigger", trigger)
+                self.tree.set(combo.id, "action", action)
+        if self._statistics_window is not None and self._statistics_window.win.winfo_exists():
+            statistics = self._statistics_window
+            selected = statistics._selected()
+            statistics._set_choices(selected.id if selected else None)
+            statistics.refresh(force=True)
+        if self._log_window is not None and self._log_window.winfo_exists():
+            self._log_filter.set(translated(self._log_filter.get()))
+            self._log_filter_box.configure(values=tuple(map(tr, ("全部紀錄", "條件失敗與錯誤", "僅錯誤"))))
+            self._log_file_label.configure(text=tr("檔案：") + self._file_logger.handlers[0].baseFilename
+                                           + tr("\n每天午夜輪替；清除僅影響介面紀錄。"))
+            self._update_log_view()
 
     def _toggle_theme(self):
         self._theme_manual = True
@@ -438,11 +490,11 @@ class App:
             self._unregister_hotkeys()
             messagebox.showerror(tr("快捷鍵設定錯誤"), tr(str(error)))
 
-    def _refresh_hotkeys(self):
+    def _refresh_hotkeys(self, register=True):
         self.lbl_hotkey.config(text=(
             f"{tr('主動: ')}{self.profile.hotkey}{tr('　背景: ')}{self.profile.background_hotkey}\n"
             f"{tr('主動 Debug: ')}{self.profile.debug_hotkey}{tr('　背景 Debug: ')}{self.profile.background_debug_hotkey}"))
-        if self._hotkeys_enabled:
+        if register and self._hotkeys_enabled:
             self._register_hotkeys()
 
     @staticmethod
@@ -788,6 +840,7 @@ class App:
                            command=self._update_log_view).pack(side="left")
             filter_box = ttk.Combobox(controls, state="readonly", width=20,
                 textvariable=self._log_filter, values=(tr("全部紀錄"), tr("條件失敗與錯誤"), tr("僅錯誤")))
+            self._log_filter_box = filter_box
             filter_box.pack(side="left", padx=8)
             filter_box.bind("<<ComboboxSelected>>", lambda e: self._update_log_view())
             ttk.Checkbutton(controls, text=tr("暫停捲動"), variable=self._log_pause).pack(side="left")
@@ -795,9 +848,10 @@ class App:
             ttk.Button(controls, text=tr("清除全部紀錄"), command=self._clear_logs).pack(side="right", padx=5)
             ttk.Label(win, text=tr("左側可多選 Combo；每個 Combo 保留最近 500 筆，依時間合併顯示。"),
                      anchor="w").pack(fill="x", padx=8)
-            ttk.Label(win, text=tr("檔案：") + self._file_logger.handlers[0].baseFilename
+            self._log_file_label = ttk.Label(win, text=tr("檔案：") + self._file_logger.handlers[0].baseFilename
                       + tr("\n每天午夜輪替；清除僅影響介面紀錄。"),
-                     anchor="w", justify="left", wraplength=950).pack(fill="x", padx=8)
+                     anchor="w", justify="left", wraplength=950)
+            self._log_file_label.pack(fill="x", padx=8)
             body = ttk.Frame(win)
             body.pack(fill="both", expand=True, padx=8, pady=5)
             self._log_selector = tk.Listbox(body, selectmode="multiple", exportselection=False, width=22)
@@ -1069,6 +1123,7 @@ class App:
                     self.tree.set(combo_id, "status", ">>>" if active else "")
             elif kind == "cycle":
                 _, count = msg
+                self._last_cycle_count = count
                 self.lbl_cycles.config(text=f"Active scans: {count}" if get_language() == "en"
                                        else f"主動掃描: {count} 次")
                 if self._debug_mode.get() and self._debug_data:

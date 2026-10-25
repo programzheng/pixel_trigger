@@ -72,8 +72,8 @@ uv run python prepare_tesseract.py
 5. Start or stop detection with the configured global hotkey.
 
 Choose **繁體中文** or **English** from the language selector in the top row.
-The choice is saved for the next launch; restart the app to apply it. Profiles
-and automation settings are shared between languages.
+The interface switches immediately, and the choice is saved for the next launch.
+Profiles and automation settings are shared between languages.
 
 Use **Statistics** to create a manual statistic or select a background OCR combo.
 Choose income, expense, net change, record count, or latest balance, then set its
