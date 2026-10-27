@@ -260,9 +260,7 @@ class BackgroundCalc:
         if not combos:
             raise ValueError("請啟用至少一個背景記帳 Combo。")
         for combo in combos:
-            validate_combo(combo)
-            if not self.capture.load_template(combo.image_path):
-                raise ValueError(f"{combo.name}{tr('：請設定不含數字的定位圖片。')}")
+            self.capture.validate_trigger_images(combo)
         capture_region(profile)
         self.ledger.load(profile)
         # Freeze identity/settings so a cancelled OCR cannot follow later UI edits.

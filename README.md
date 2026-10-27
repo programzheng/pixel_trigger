@@ -132,3 +132,17 @@ testing expectations, and pull request guidance.
 
 Use automation only in applications and environments where you have permission
 to do so.
+
+## Multiple trigger images
+
+A Combo can contain an ordered list of images. Browse supports multiple selection; paste and capture add an item. Remove only removes the list entry, not the source file. Each scan uses the first matching image and runs one shared action. Switching from image A to B counts as continuous visibility; trigger-once rearms only after all images disappear.
+
+Regions, sampled marker/band colors, include/ignore masks, and the balance number region belong to the selected image. Image confidence, OCR text conditions, color tolerance, area limits, start/stop thresholds, and missing-marker tolerance are shared. Switching images retains editor drafts; Save commits them to the Combo.
+
+Position/color-band control selects the first matching template before evaluating its image-specific region and colors. A failed control condition does not select another image. Fixed-screen mode bypasses the image list; returning to template mode restores it. Background balance tracking reads the selected image's number region once per scan, without trying another image after an OCR failure.
+
+Existing single-image profiles load automatically. New profiles retain first-image legacy fields, but older versions only use that image and may discard the list when saving. More images increase worst-case scan time.
+
+![Multiple trigger images](docs/multi-trigger.png)
+
+![Shared settings and per-image editor](docs/multi-trigger-settings.png)

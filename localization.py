@@ -4,6 +4,14 @@ LANGUAGES = ("zh-TW", "en")
 _language = "zh-TW"
 
 ENGLISH = {
+    "模板定位": "Locate by image",
+    "固定螢幕區域": "Fixed screen region",
+    "共用控制參數": "Shared control settings",
+    "圖片順序：任一符合；由上往下優先。": "Images: match any, in top-to-bottom priority order.",
+    "此圖片設定：框選、取色與遮罩；其餘參數共用。": "This image: regions, sampled colors and masks. Other settings are shared.",
+    "此圖片已在清單中。": "This image is already in the list.",
+    "移除": "Remove",
+
     "pixel_trigger 已啟動！主動偵測：{active}，背景偵測：{background}":
         "pixel_trigger started. Active detection: {active}, background detection: {background}",
     "：": ": ",
@@ -249,7 +257,7 @@ ENGLISH = {
         "Click along the outer edge, then back along the inner edge, and press Finish.\n",
     "藍框內才辨識；紫色排除。未圈有效範圍時使用整張區塊。\n":
         "Only the blue area is detected; purple is excluded. Without a valid area, the whole image is used.\n",
-    "保留箭頭完整路徑；換圖或改偵測範圍會清除兩種區域。":
+    "保留箭頭完整路徑；替換圖片或改偵測範圍會清除兩種區域。":
         "Keep the arrow's full path. Changing the image or detection area clears both regions.",
     "先框選觸發圖片區塊，再點圖片取色或設定界線。":
         "Select the trigger image area, then click it to pick colors or set boundaries.",

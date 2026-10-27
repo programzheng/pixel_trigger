@@ -94,6 +94,8 @@ class HookEngine:
             if get_window_region(profile.window_handle, profile.window_pid) is None:
                 raise ValueError("目標視窗不可用，請還原視窗或重新選擇。")
         for combo in profile.combos:
+            if combo.enabled and combo.detection_mode == "active" and not combo.trigger.tracks_marker:
+                self._capture.validate_trigger_images(combo)
             if combo.enabled and combo.detection_mode == "active" and combo.action.action_type == ActionType.PLAY_SOUND:
                 if not 0 <= combo.action.delay_min <= combo.action.delay_max < float("inf"):
                     raise ValueError("音效延遲必須是有限非負數，且最小值不能大於最大值。")
@@ -106,14 +108,7 @@ class HookEngine:
         positions = [c for c in self._profile.combos
                      if c.enabled and c.detection_mode == "active" and c.trigger.tracks_marker]
         for combo in positions:
-            combo.position_control.validate()
-            if combo.position_control.region_space == "template":
-                if not self._capture.load_template(combo.image_path):
-                    raise ValueError("位置控制請先指定有效的觸發圖片。")
-                tw, th = self._capture.get_template_size(combo.image_path)
-                x, y, w, h = combo.position_control.region
-                if x < 0 or y < 0 or x + w > tw or y + h > th:
-                    raise ValueError("箭頭追蹤區域必須在觸發圖片內。")
+            self._capture.validate_trigger_images(combo)
             action = combo.action
             if (any(not math.isfinite(v) or v < 0 for v in
                     (action.delay_min, action.delay_max, action.duration,
@@ -200,7 +195,7 @@ class HookEngine:
             enabled_combos = [
                 c for c in profile.combos
                 if c.enabled and c.detection_mode == "active" and not c.trigger.tracks_marker
-                and (c.image_path or c.verify_text)
+                and (c.image_items() or c.verify_text)
             ]
 
             # 截圖一次，所有 combo 共用
@@ -267,14 +262,24 @@ class HookEngine:
             return region
         return profile.scan_region
 
-    def _process_combo(
-        self, combo: Combo, frame, region: tuple[int, int, int, int] | None
-    ):
-        """處理單一 Combo 的偵測與觸發"""
-        if combo.detection_mode != "active":
-            return
-        if self._stop_event.is_set():
-            return
+    def _detect_combo(self, combo, frame, region, allow_local=True):
+        best = (False, 0.0, None, 0.0, "圖片定位未通過")
+        items = combo.image_items()
+        candidates = [combo.for_image(item) for item in items] if items else [combo]
+        for candidate in candidates:
+            if self._stop_event.is_set():
+                break
+            result = self._detect_image(candidate, frame, region,
+                                        allow_local and len(candidates) == 1)
+            if result[0]:
+                self._capture.record_combo_match(combo.id, candidate.image_path)
+                return result
+            if result[1] >= best[1]:
+                best = result
+        self._capture.record_combo_match(combo.id, None)
+        return best
+
+    def _detect_image(self, combo, frame, region, allow_local=True):
         text_conf = 0.0
         confidence = 0.0
         match_rect = None
@@ -300,7 +305,7 @@ class HookEngine:
             # ── 圖片比對模式 ──
             match_started = time.perf_counter()
             previous_rect = (self._visible_rects.get(combo.id)
-                             if combo.trigger == TriggerMode.WHILE_VISIBLE and not combo.verify_text
+                             if allow_local and combo.trigger == TriggerMode.WHILE_VISIBLE and not combo.verify_text
                              else None)
             if previous_rect is not None:
                 confidence = self._capture.score_template_at(
@@ -356,6 +361,18 @@ class HookEngine:
                     cx, cy = pos
                     match_rect = (cx - tw // 2, cy - th // 2, tw, th)
 
+        return found, confidence, match_rect, text_conf, reason
+
+    def _process_combo(
+        self, combo: Combo, frame, region: tuple[int, int, int, int] | None
+    ):
+        """處理單一 Combo 的偵測與觸發"""
+        if combo.detection_mode != "active":
+            return
+        if self._stop_event.is_set():
+            return
+        found, confidence, match_rect, text_conf, reason = self._detect_combo(combo, frame, region)
+
         if self._stop_event.is_set():
             return
         was_visible = self._prev_visible.get(combo.id, False)
@@ -368,7 +385,7 @@ class HookEngine:
             else:
                 self._visible_rects.pop(combo.id, None)
         detail = (tr("圖片分數={score:.6f}／閾值={threshold:.6f}").format(
-            score=confidence, threshold=combo.match_threshold) if combo.image_path else "")
+            score=confidence, threshold=combo.match_threshold) if combo.image_items() else "")
         if combo.verify_text:
             detail += tr(" OCR分數={score:.3f}／閾值={threshold:.3f} 文字模式={mode}").format(
                 score=text_conf, threshold=combo.text_threshold, mode=combo.text_match_mode.value)
@@ -376,6 +393,9 @@ class HookEngine:
             detail += tr("；已持續可見，等待消失再觸發" if was_visible else "；首次出現，觸發動作")
         elif combo.trigger == TriggerMode.WHILE_VISIBLE:
             detail += tr("；條件成立，持續動作" if found else "；條件失效，停止動作")
+        matched_path = self._capture.get_combo_match(combo.id)
+        if matched_path:
+            detail += f" [{matched_path}]"
         self._log(combo, reason, detail, level="info" if found else "failure")
 
         # Debug callback — 每個週期都回報
@@ -433,8 +453,10 @@ class HookEngine:
                         return
                     frame = self._capture.grab_frame(region)
                     if (frame is None or self._scan_region() != region
-                            or self._capture.score_template_at(
-                                frame, combo.image_path, match_rect, region) < combo.match_threshold):
+                            or not (self._detect_combo(combo, frame, region, allow_local=False)[0]
+                                    if len(combo.image_items()) > 1 or combo.verify_text else
+                                    self._capture.score_template_at(
+                                        frame, combo.image_items()[0].image_path, match_rect, region) >= combo.match_threshold)):
                         self._log(combo, "點擊前圖片已消失，取消動作", category="action")
                         if self._on_debug_info:
                             self._on_debug_info(combo.id, False, 0.0, None)
@@ -687,6 +709,7 @@ class HookEngine:
         action_stop = threading.Event()
         action_thread = None
         missing_since = None
+        previous_image = None
         try:
             while not stop_event.is_set() and not self._stop_event.is_set():
                 if not combo.enabled or combo not in self._profile.combos:
@@ -701,10 +724,16 @@ class HookEngine:
                 if position_ms >= 50:
                     self._log(combo, "定位與截圖耗時", f"{position_ms:.0f} ms",
                               category="position_timing")
+                selected = self._capture.get_position_combo() or combo
+                settings = selected.position_control
+                if selected.image_path != previous_image:
+                    missing_since = None
+                    previous_image = selected.image_path
                 marker = find_color_marker(frame, settings)
                 score = self._capture.get_position_confidence()
                 detail = tr("定位分數={score:.6f}／閾值={threshold:.6f}").format(
                     score=score, threshold=combo.match_threshold)
+                detail += f" [{selected.image_path}]"
                 reason = ""
                 if frame is None:
                     reason = "圖片定位未通過" if score < combo.match_threshold else "追蹤區域無法擷取"

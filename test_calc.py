@@ -552,7 +552,7 @@ class CalcTests(unittest.TestCase):
                 with patch.object(tk.Toplevel, "wait_window"):
                     editor = ComboEditor(root, Combo(detection_mode="background"))
                 with patch("screen_capture.ocr_read_image") as ocr, \
-                        patch("gui.filedialog.askopenfilename", return_value=str(path)):
+                        patch("gui.filedialog.askopenfilenames", return_value=(str(path),)):
                     for mode in ("background", "active"):
                         editor.var_detection_mode.set(mode)
                         editor.var_verify_text.set("既有驗證文字")
@@ -585,7 +585,8 @@ class CalcTests(unittest.TestCase):
     def test_stop_does_not_join_ocr_or_record_a_cancelled_result(self):
         with tempfile.TemporaryDirectory() as folder:
             engine = BackgroundCalc(Mock(), Ledger(folder))
-            combo = Combo(name="original", detection_mode="background", calc_region=(0, 0, 4, 4))
+            combo = Combo(name="original", detection_mode="background", image_path="icon.png",
+                          calc_region=(0, 0, 4, 4))
             profile = Profile(combos=[combo])
             entered, release = threading.Event(), threading.Event()
             seen = []

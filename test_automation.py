@@ -239,6 +239,7 @@ class ResponsiveAutomationTest(unittest.TestCase):
                 detected.set()
 
         with patch.object(engine._capture, "grab_frame", return_value=np.zeros((2, 2))), \
+                patch.object(engine._capture, "load_template", return_value=True), \
                 patch.object(engine, "_process_combo", side_effect=process):
             try:
                 engine.start()

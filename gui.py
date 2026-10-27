@@ -13,6 +13,7 @@ import threading
 import tomllib
 import uuid
 from copy import deepcopy
+from dataclasses import replace
 import keyboard
 import tkinter as tk
 from datetime import datetime, timedelta
@@ -44,6 +45,7 @@ from models import (
     PositionControl,
     TextMatchMode,
     TriggerMode,
+    TriggerImage,
 )
 
 # ── 顯示用對照表 ─────────────────────────────────────────
@@ -803,8 +805,12 @@ class App:
             ))
 
     def _match_scale_label(self, combo: Combo) -> str:
-        scale = (self.background.capture.get_match_scale(combo.image_path)
-                 if combo.detection_mode == "background" else self.engine.get_match_scale(combo.image_path))
+        capture = self.background.capture if combo.detection_mode == "background" else self.engine._capture
+        path = capture.get_combo_match(combo.id)
+        if path is None and len(combo.image_items()) == 1:
+            path = combo.image_items()[0].image_path
+        scale = ((capture.get_match_scale(path) if combo.detection_mode == "background"
+                  else self.engine.get_match_scale(path)) if path else None)
         return f"{scale * 100:.1f}%" if scale is not None else "—"
 
     def _action_summary(self, action: Action) -> str:
@@ -1022,7 +1028,7 @@ class App:
 
     def _start(self):
         enabled = [c for c in self.profile.combos if c.enabled and c.detection_mode == "active" and
-                   (c.image_path or c.verify_text or c.trigger.tracks_marker)]
+                   (c.image_items() or c.verify_text or c.trigger.tracks_marker)]
         if not enabled:
             messagebox.showwarning(tr("提醒"), tr("請啟用至少一個已設定圖片、文字或位置控制的主動偵測 Combo。"))
             return
@@ -1273,6 +1279,16 @@ class ComboEditor:
 
     def __init__(self, parent, combo: Combo, profile: Profile | None = None):
         self.combo = combo
+        self._image_items = deepcopy(combo.image_items())
+        self._image_index = 0 if self._image_items else None
+        self._loading_image = False
+        self._screen_position = deepcopy(combo.position_control)
+        self._screen_position.region_space = "screen"
+        if combo.position_control.region_space != "screen":
+            self._screen_position.region = None
+            self._screen_position.ignore_polygon = ()
+            self._screen_position.include_polygon = ()
+        self._region_space = combo.position_control.region_space
         self.profile = profile or Profile()
         self.result = False
         self._calc_preview_job = None
@@ -1323,11 +1339,27 @@ class ComboEditor:
         frm_img.pack(fill="x", **pad)
         self.lbl_image = ttk.Label(frm_img, text=tr("觸發圖片:"))
         self.lbl_image.pack(side="left")
-        self.var_image = tk.StringVar(value=combo.image_path)
+        self.var_image = tk.StringVar(value=self._image_items[0].image_path if self._image_items else "")
         ttk.Entry(frm_img, textvariable=self.var_image, width=12).pack(side="left", padx=5, fill="x", expand=True)
         ttk.Button(frm_img, text=tr("瀏覽"), command=self._browse_image).pack(side="left", padx=2)
         ttk.Button(frm_img, text=tr("貼上"), command=self._paste_image).pack(side="left", padx=2)
         ttk.Button(frm_img, text=tr("框選"), command=self._capture_image).pack(side="left", padx=2)
+
+        self.frm_images = ttk.Frame(sf)
+        self.frm_images.pack(fill="x", **pad)
+        ttk.Label(self.frm_images, text=tr("圖片順序：任一符合；由上往下優先。"), wraplength=480).pack(anchor="w")
+        self.image_list = tk.Listbox(self.frm_images, height=3, exportselection=False)
+        self.image_list.pack(fill="x")
+        self.image_list.bind("<<ListboxSelect>>", self._select_image)
+        row = ttk.Frame(self.frm_images)
+        row.pack(fill="x")
+        for label, command in (("移除", self._remove_image), ("上移", lambda: self._move_image(-1)),
+                               ("下移", lambda: self._move_image(1))):
+            ttk.Button(row, text=tr(label), command=command).pack(side="left", padx=2)
+        self.lbl_image_scope = ttk.Label(self.frm_images,
+            text=tr("此圖片設定：框選、取色與遮罩；其餘參數共用。"), wraplength=480)
+        self.lbl_image_scope.pack(anchor="w")
+        self._refresh_image_list()
 
         # 圖片預覽（文字 + 去背按鈕 + 縮圖）
         frm_preview = ttk.Frame(sf)
@@ -1406,7 +1438,7 @@ class ComboEditor:
 
         # 觸發模式
         self.image_widgets = sf.winfo_children()[image_start:]
-        self.position_image_widgets = (frm_img, frm_preview, frm_thresh)
+        self.position_image_widgets = (frm_img, self.frm_images, frm_preview, frm_thresh)
         self.image_pack = {w: w.pack_info() for w in self.image_widgets if w.winfo_manager() == "pack"}
         self.lbl_trigger = ttk.Label(sf, text=tr("觸發模式:"))
         self.lbl_trigger.pack(anchor="w", **pad)
@@ -1531,11 +1563,129 @@ class ComboEditor:
         ttk.Button(self.frm_calc, text=tr("測試讀值（不記帳）"), command=self._test_calc).pack(anchor="w")
         self.lbl_calc_preview = ttk.Label(self.frm_calc, text="", wraplength=340)
         self.lbl_calc_preview.pack()
+        if self._image_items:
+            self._load_image_draft()
         self._on_detection_mode_change()
         self.win.wait_window()
 
+    def _refresh_image_list(self):
+        self.image_list.delete(0, "end")
+        for item in self._image_items:
+            self.image_list.insert("end", Path(item.image_path).name)
+        if self._image_index is not None:
+            self.image_list.selection_set(self._image_index)
+            self.image_list.see(self._image_index)
+
+    def _store_image_draft(self):
+        if self._ignore_draft is not None:
+            raise ValueError(tr("請先完成或取消區域圈選，再儲存。"))
+        if self._region_space == "screen":
+            self._screen_position = self._position_settings(validate=False)
+            return
+        path = self.var_image.get().strip()
+        if not path:
+            if self._image_index is not None:
+                raise ValueError(tr("請先指定有效的觸發圖片。"))
+            return
+        settings = self._position_settings(validate=False)
+        region = tuple(int(v.get()) for v in self.calc_region_vars)
+        item = TriggerImage(path, settings.region, settings.color, settings.band_color,
+                            settings.ignore_polygon, settings.include_polygon,
+                            region if any(region) else None)
+        if any(os.path.normcase(os.path.abspath(other.image_path)) == os.path.normcase(os.path.abspath(path))
+               for i, other in enumerate(self._image_items) if i != self._image_index):
+            raise ValueError(tr("此圖片已在清單中。"))
+        if self._image_index is None:
+            self._image_items.append(item)
+            self._image_index = len(self._image_items) - 1
+        else:
+            self._image_items[self._image_index] = item
+
+    def _load_image_draft(self):
+        item = self._image_items[self._image_index] if self._image_index is not None else TriggerImage()
+        if self._region_space == "screen":
+            item = TriggerImage.from_combo(replace(self.combo, position_control=self._screen_position))
+        self._loading_image = True
+        try:
+            self.var_image.set(item.image_path)
+            for var, value in zip(self.position_region_vars, item.region or (None,) * 4):
+                var.set("" if value is None else str(value))
+            self.var_position_color.set("#%02x%02x%02x" % item.color)
+            self.var_band_color.set("#%02x%02x%02x" % item.band_color)
+            self._ignore_polygon = item.ignore_polygon
+            self._include_polygon = item.include_polygon
+            for var, value in zip(self.calc_region_vars, item.calc_region or (0,) * 4):
+                var.set(str(value))
+        finally:
+            self._loading_image = False
+        self._refresh_image_list()
+        self.lbl_image_scope.config(text=tr("此圖片設定：框選、取色與遮罩；其餘參數共用。") + "\n" + Path(item.image_path).name)
+        if item.image_path:
+            self._update_preview(item.image_path)
+        else:
+            self.lbl_preview.config(text="")
+            self.lbl_thumb.pack_forget()
+        self._preview_position()
+
+    def _select_image(self, event=None):
+        selected = self.image_list.curselection()
+        if not selected or selected[0] == self._image_index:
+            return
+        try:
+            self._store_image_draft()
+            self._image_index = selected[0]
+            self._load_image_draft()
+        except ValueError as exc:
+            self._refresh_image_list()
+            messagebox.showerror(tr("錯誤"), str(exc), parent=self.win)
+
+    def _add_images(self, paths):
+        try:
+            self._store_image_draft()
+            known = {os.path.normcase(os.path.abspath(item.image_path)) for item in self._image_items}
+            additions = []
+            for path in paths:
+                key = os.path.normcase(os.path.abspath(path))
+                if key not in known:
+                    with Image.open(path) as image:
+                        image.load()
+                    additions.append(TriggerImage(image_path=path))
+                    known.add(key)
+            self._image_items.extend(additions)
+            if additions:
+                self._image_index = len(self._image_items) - 1
+            self._load_image_draft()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(tr("錯誤"), str(exc), parent=self.win)
+
+    def _remove_image(self):
+        if self._image_index is None:
+            return
+        if self._ignore_draft is not None:
+            messagebox.showerror(tr("錯誤"), tr("請先完成或取消區域圈選，再儲存。"), parent=self.win)
+            return
+        self._image_items.pop(self._image_index)
+        self._image_index = min(self._image_index, len(self._image_items) - 1) if self._image_items else None
+        self._load_image_draft()
+
+    def _move_image(self, delta):
+        if self._image_index is None:
+            return
+        try:
+            self._store_image_draft()
+            index = self._image_index + delta
+            if 0 <= index < len(self._image_items):
+                self._image_items[self._image_index], self._image_items[index] = self._image_items[index], self._image_items[self._image_index]
+                self._image_index = index
+            self._refresh_image_list()
+        except ValueError as exc:
+            messagebox.showerror(tr("錯誤"), str(exc), parent=self.win)
+
     def _on_detection_mode_change(self):
         background = self.var_detection_mode.get() == "background"
+        if background and self._region_space == "screen":
+            self.var_region_space.set("template")
+            self._change_region_space()
         self.lbl_image.config(text=tr("定位圖片:") if background else tr("觸發圖片:"))
         self.frm_calc.pack_forget()
         for widget in self._active_widgets:
@@ -1555,7 +1705,7 @@ class ComboEditor:
     def _calc_settings(self):
         from dataclasses import replace
         candidate = replace(self.combo, name=self.var_name.get().strip() or tr("新組合"),
-                            detection_mode="background", image_path=self.var_image.get().strip(),
+                            detection_mode="background", image_path=self.var_image.get().strip(), trigger_images=[],
                             calc_region=tuple(int(v.get()) for v in self.calc_region_vars),
                             daily_reset_time=self.var_daily_reset_time.get().strip(),
                             low_confidence_confirmations=int(
@@ -1766,8 +1916,7 @@ class ComboEditor:
                     self.var_target_image.set(str(path))
                     self._update_target_preview(str(path))
                 else:
-                    self.var_image.set(str(path))
-                    self._update_preview(str(path))
+                    self._add_images([str(path)])
         except Exception as e:
             messagebox.showerror(tr("錯誤"), f"{tr('擷取圖片失敗:')}\n{tr(str(e))}", parent=self.win)
         finally:
@@ -1776,7 +1925,8 @@ class ComboEditor:
             self.win.grab_set()
 
     def _browse_image(self, target: bool = False):
-        path = filedialog.askopenfilename(
+        picker = filedialog.askopenfilename if target else filedialog.askopenfilenames
+        path = picker(
             title=tr("選擇點擊目標圖片") if target else tr("選擇定位圖片") if self.var_detection_mode.get() == "background" else tr("選擇觸發圖片"),
             initialdir=str(profile_manager.TEMPLATES_DIR),
             filetypes=[(tr("圖片"), "*.png *.jpg *.bmp"), (tr("所有檔案"), "*.*")],
@@ -1786,8 +1936,7 @@ class ComboEditor:
                 self.var_target_image.set(path)
                 self._update_target_preview(path)
             else:
-                self.var_image.set(path)
-                self._update_preview(path)
+                self._add_images(path)
 
     def _paste_image(self):
         """從剪貼簿貼上圖片，自動存到 templates/ 目錄"""
@@ -1803,7 +1952,7 @@ class ComboEditor:
         profile_manager.TEMPLATES_DIR.mkdir(exist_ok=True)
 
         # 純英數檔名（避免中文路徑導致 OpenCV 讀取失敗）
-        timestamp = int(time.time())
+        timestamp = time.time_ns()
         filename = f"template_{timestamp}.png"
         save_path = profile_manager.TEMPLATES_DIR / filename
 
@@ -1813,8 +1962,7 @@ class ComboEditor:
             messagebox.showerror(tr("錯誤"), f"{tr('儲存圖片失敗:')}\n{tr(str(e))}")
             return
 
-        self.var_image.set(str(save_path))
-        self._update_preview(str(save_path))
+        self._add_images([str(save_path)])
 
     def _remove_bg(self):
         """開啟色彩去背對話框"""
@@ -1827,15 +1975,22 @@ class ComboEditor:
             self._update_preview(dlg.result_path)
 
     def _build_position_ui(self, parent):
-        settings = self.combo.position_control
+        settings = (self._image_items[0].position_settings(self.combo.position_control)
+                    if self._image_items and self.combo.position_control.region_space == "template"
+                    else self.combo.position_control)
         self.frm_position = ttk.Labelframe(parent, text=tr("位置控制設定"), padding=(8, 5))
+        self.var_region_space = tk.StringVar(value=self._region_space)
+        row = ttk.Frame(self.frm_position)
+        row.pack(fill="x")
+        for label, value in (("模板定位", "template"), ("固定螢幕區域", "screen")):
+            ttk.Radiobutton(row, text=tr(label), value=value, variable=self.var_region_space,
+                            command=self._change_region_space).pack(side="left")
         ttk.Label(self.frm_position, text=tr("完整觸發圖片用於定位；框選區域只用來追蹤箭頭。"),
                  wraplength=340, justify="left").pack(anchor="w")
         row = ttk.Frame(self.frm_position)
         row.pack(fill="x")
         self.position_region_vars = [tk.StringVar(value=str(v) if v is not None else "")
-                                     for v in (settings.region if settings.region_space == "template"
-                                               and settings.region else (None,) * 4)]
+                                     for v in (settings.region or (None,) * 4)]
         for label, var in zip(("X", "Y", tr("寬"), tr("高")), self.position_region_vars):
             ttk.Label(row, text=label).pack(side="left")
             ttk.Entry(row, textvariable=var, width=5).pack(side="left")
@@ -1852,6 +2007,7 @@ class ComboEditor:
         self.var_band_stop = tk.StringVar(value=f"{settings.band_stop:g}")
         self.var_band_margin = tk.StringVar(value=str(settings.band_margin))
         self.var_band_missing_ms = tk.StringVar(value=str(settings.band_missing_ms))
+        self.frm_position_shared = ttk.Labelframe(self.frm_position, text=tr("共用控制參數"), padding=4)
         self.position_only_rows = []
         self.band_only_rows = []
         for label, var in ((tr("標記顏色 (#RRGGBB)"), self.var_position_color),
@@ -1866,7 +2022,8 @@ class ComboEditor:
                            (tr("停止色帶比例 (0~1)"), self.var_band_stop),
                            (tr("取樣範圍 (箭頭倍數)"), self.var_band_margin),
                            (tr("漏判容忍時間 (ms)"), self.var_band_missing_ms)):
-            row = ttk.Frame(self.frm_position)
+            parent = self.frm_position if var in (self.var_position_color, self.var_band_color) else self.frm_position_shared
+            row = ttk.Frame(parent)
             row.pack(fill="x")
             ttk.Label(row, text=label, width=22, anchor="w").pack(side="left")
             ttk.Entry(row, textvariable=var, width=10).pack(side="left")
@@ -1879,6 +2036,7 @@ class ComboEditor:
             text=tr("色帶判斷：排除箭頭與白／暗色後取樣。漏判時在容忍時間內維持動作；0 表示立即停止。辨識到停止比例仍立即停止。同色背景可能使箭頭辨識失敗。"))
         self.lbl_control_hint = ttk.Label(self.frm_position, wraplength=340, justify="left",
             text=tr("條件成立時：單擊／按一下／點圖／音效執行一次；連點／長按依時間與間隔重複。條件失效立即取消。"))
+        self.frm_position_shared.pack(fill="x", pady=4)
         self.lbl_control_hint.pack(anchor="w")
         self.var_position_preview = tk.BooleanVar(value=True)
         self._position_preview_job = None
@@ -1916,7 +2074,7 @@ class ComboEditor:
             ttk.Button(row, text=label, command=command).pack(side="left")
         ttk.Label(self.frm_position, text=tr("沿刻度帶外緣、再沿內緣反向點選，按完成。\n") +
                    tr("藍框內才辨識；紫色排除。未圈有效範圍時使用整張區塊。\n") +
-                  tr("保留箭頭完整路徑；換圖或改偵測範圍會清除兩種區域。"), wraplength=340).pack(anchor="w")
+                  tr("保留箭頭完整路徑；替換圖片或改偵測範圍會清除兩種區域。"), wraplength=340).pack(anchor="w")
         self.lbl_position_status = ttk.Label(self.frm_position, text=tr("先框選觸發圖片區塊，再點圖片取色或設定界線。"),
                                             wraplength=340, justify="left")
         self.lbl_position_status.pack(anchor="w")
@@ -1931,11 +2089,25 @@ class ComboEditor:
             var.trace_add("write", self._refresh_band_preview)
 
     def _refresh_band_preview(self, *args):
+        if self._loading_image:
+            return
         if self.var_trigger.get() == TriggerMode.COLOR_BAND.value:
             self._preview_position()
 
-    def _position_settings(self):
-        if any(not var.get().strip() for var in self.position_region_vars):
+    def _change_region_space(self):
+        new_space = self.var_region_space.get()
+        try:
+            self._store_image_draft()
+        except ValueError as exc:
+            self.var_region_space.set(self._region_space)
+            messagebox.showerror(tr("錯誤"), str(exc), parent=self.win)
+            return
+        self._region_space = new_space
+        self._load_image_draft()
+        self._on_action_type_change()
+
+    def _position_settings(self, validate=True):
+        if validate and any(not var.get().strip() for var in self.position_region_vars):
             raise ValueError(tr("請先框選觸發圖片的偵測區塊。"))
         value = self.var_position_color.get().strip()
         if len(value) != 7 or not value.startswith("#"):
@@ -1944,7 +2116,9 @@ class ComboEditor:
         if len(band_color) != 7 or not band_color.startswith("#"):
             raise ValueError(tr("色帶顏色格式必須是 #RRGGBB。"))
         settings = PositionControl(
-            region=tuple(int(var.get()) for var in self.position_region_vars),
+            region_space=self._region_space,
+            region=(tuple(int(var.get()) for var in self.position_region_vars)
+                    if any(var.get().strip() for var in self.position_region_vars) else None),
             color=tuple(int(value[i:i + 2], 16) for i in (1, 3, 5)),
             tolerance=int(self.var_position_tolerance.get()),
             min_area=int(self.var_position_area.get()),
@@ -1958,7 +2132,11 @@ class ComboEditor:
             band_margin=self._to_float(self.var_band_margin.get()),
             band_missing_ms=int(self.var_band_missing_ms.get()),
             ignore_polygon=self._ignore_polygon, include_polygon=self._include_polygon)
+        if not validate:
+            return settings
         settings.validate()
+        if settings.region_space == "screen":
+            return settings
         try:
             with Image.open(self.var_image.get().strip()) as image:
                 tw, th = image.size
@@ -1970,6 +2148,13 @@ class ComboEditor:
         return settings
 
     def _select_position_region(self):
+        if self._region_space == "screen":
+            selector = RegionSelector(self.win)
+            if selector.result:
+                for var, value in zip(self.position_region_vars, selector.result):
+                    var.set(str(value))
+                self._preview_position()
+            return
         try:
             with Image.open(self.var_image.get().strip()) as image:
                 image = image.convert("RGBA")
@@ -2036,6 +2221,8 @@ class ComboEditor:
         self._cancel_ignore_polygon()
 
     def _clear_position_polygons(self, *args):
+        if self._loading_image:
+            return
         self._include_polygon = ()
         self._clear_ignore_polygon()
 
@@ -2047,9 +2234,12 @@ class ComboEditor:
             return
         try:
             settings = self._position_settings()
-            with Image.open(self.var_image.get().strip()) as image:
-                x, y, w, h = settings.region
-                frame = np.array(image.convert("RGBA").crop((x, y, x + w, y + h)))
+            if settings.region_space == "screen":
+                frame = ScreenCapture().grab_frame(settings.region, color=True)
+            else:
+                with Image.open(self.var_image.get().strip()) as image:
+                    x, y, w, h = settings.region
+                    frame = np.array(image.convert("RGBA").crop((x, y, x + w, y + h)))
             self._position_frame = frame
             if frame is None:
                 raise ValueError(tr("無法擷取畫面。"))
@@ -2163,12 +2353,20 @@ class ComboEditor:
         at = self.var_action_type.get()
         trigger = self.var_trigger.get()
         position_mode = TriggerMode(trigger).tracks_marker
+        if not position_mode and self._region_space == "screen" and hasattr(self, "calc_region_vars"):
+            self._store_image_draft()
+            self._region_space = "template"
+            self.var_region_space.set("template")
+            self._load_image_draft()
         band_mode = trigger == TriggerMode.COLOR_BAND.value
         self.frm_position.config(text=tr("色帶判斷設定") if band_mode else tr("位置控制設定"))
         for row in self.position_only_rows + self.band_only_rows:
             row.pack_forget()
         for row in self.band_only_rows if band_mode else self.position_only_rows:
-            row.pack(fill="x", before=self.lbl_control_hint)
+            if row.master == self.frm_position:
+                row.pack(fill="x", before=self.frm_position_shared)
+            else:
+                row.pack(fill="x")
         self.lbl_band_hint.pack_forget()
         if band_mode:
             self.lbl_band_hint.pack(anchor="w", before=self.lbl_control_hint)
@@ -2180,9 +2378,11 @@ class ComboEditor:
         for widget in self.image_widgets:
             widget.pack_forget()
         for widget, options in self.image_pack.items():
+            if position_mode and self._region_space == "screen":
+                continue
             if not position_mode or widget in self.position_image_widgets:
                 widget.pack(**{**options, "before": self.lbl_trigger})
-        if self.var_image.get().strip():
+        if self.var_image.get().strip() and not (position_mode and self._region_space == "screen"):
             self._update_preview(self.var_image.get().strip())
             self.lbl_thumb.pack(before=self.lbl_trigger, anchor="w", padx=10, pady=2)
         self.frm_position.pack_forget()
@@ -2233,11 +2433,15 @@ class ComboEditor:
 
     def _ok(self):
         try:
+            self._store_image_draft()
             if self.var_detection_mode.get() == "background":
                 candidate = self._calc_settings()
-                if not ScreenCapture().load_template(candidate.image_path):
-                    raise ValueError(tr("請設定有效的固定圖示定位圖片。"))
-                for name in ("name", "detection_mode", "image_path", "calc_region",
+                candidate.trigger_images = deepcopy(self._image_items)
+                ScreenCapture().validate_trigger_images(candidate)
+                if candidate.trigger_images:
+                    candidate.image_path = candidate.trigger_images[0].image_path
+                    candidate.calc_region = candidate.trigger_images[0].calc_region
+                for name in ("name", "detection_mode", "image_path", "calc_region", "trigger_images",
                              "daily_reset_time",
                              "low_confidence_confirmations",
                              "text_threshold", "match_threshold"):
@@ -2260,7 +2464,8 @@ class ComboEditor:
             trigger = TriggerMode(self.var_trigger.get())
             if trigger.tracks_marker and self._ignore_draft is not None:
                 raise ValueError(tr("請先完成或取消區域圈選，再儲存。"))
-            position_settings = self._position_settings() if trigger.tracks_marker else self.combo.position_control
+            position_settings = (self._position_settings() if trigger.tracks_marker
+                                 else self._position_settings(validate=False))
 
             at = self.var_action_type.get()
             action_type = ActionType(at)
@@ -2298,7 +2503,17 @@ class ComboEditor:
             interval_max = (self._to_float(self.var_interval_max.get(), 0.15)
                             if is_rapid or is_hold else self.combo.action.interval_max)
 
+            candidate = replace(self.combo, detection_mode="active", trigger=trigger,
+                                trigger_images=deepcopy(self._image_items), image_path=image_path,
+                                position_control=position_settings, match_threshold=match_threshold)
+            ScreenCapture().validate_trigger_images(candidate)
+            if candidate.trigger_images:
+                image_path = candidate.trigger_images[0].image_path
+                if position_settings.region_space == "template":
+                    position_settings = candidate.trigger_images[0].position_settings(position_settings)
+
             # ── 全部合法才寫入（避免 partial update）──
+            self.combo.trigger_images = candidate.trigger_images
             self.combo.name = name
             self.combo.detection_mode = "active"
             self.combo.image_path = image_path

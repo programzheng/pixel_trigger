@@ -265,6 +265,7 @@ class ScreenCapture:
         self._cache: dict[str, tuple[np.ndarray,
                                      int, int, np.ndarray | None]] = {}
         self._match_state = threading.local()
+        self._combo_matches = {}
         self._preferred_scales: dict[str, float] = {}
         self._last_matches: dict[str, tuple] = {}
         self._scale_offsets: dict[str, int] = {}
@@ -460,9 +461,64 @@ class ScreenCapture:
         return confidence
 
 
+    def record_combo_match(self, combo_id, path):
+        self._combo_matches[combo_id] = path
+
+    def get_combo_match(self, combo_id):
+        return self._combo_matches.get(combo_id)
+
+    def get_position_combo(self):
+        return getattr(self._match_state, "position_combo", None)
+
+    def validate_trigger_images(self, combo):
+        if combo.trigger.tracks_marker and combo.detection_mode == "active" and combo.position_control.region_space == "screen":
+            combo.position_control.validate()
+            return
+        items = combo.image_items()
+        if not items and (combo.trigger.tracks_marker or combo.detection_mode == "background"):
+            raise ValueError(tr("請先指定有效的觸發圖片。"))
+        if not 0 <= combo.match_threshold <= 1:
+            raise ValueError(tr("圖片閾值必須介於 0~1。"))
+        for item in items:
+            try:
+                if not self.load_template(item.image_path):
+                    raise ValueError(tr("請先指定有效的觸發圖片。"))
+                selected = combo.for_image(item)
+                if combo.detection_mode == "background":
+                    from calc import validate_combo
+                    validate_combo(selected)
+                elif combo.trigger.tracks_marker:
+                    settings = selected.position_control
+                    settings.validate()
+                    tw, th = self.get_template_size(item.image_path)
+                    x, y, w, h = settings.region
+                    if x < 0 or y < 0 or x + w > tw or y + h > th:
+                        raise ValueError(tr("箭頭追蹤區域必須在觸發圖片內。"))
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"{item.image_path}: {exc}") from exc
+
+    def match_combo_template(self, combo, frame, region=None, **kwargs):
+        best = (False, 0.0, None)
+        selected = combo
+        self.record_combo_match(combo.id, None)
+        for item in combo.image_items():
+            stop = kwargs.get("stop_event")
+            if stop is not None and stop.is_set():
+                break
+            candidate = combo.for_image(item)
+            result = self.match_template(frame, item.image_path, combo.match_threshold, region, **kwargs)
+            if result[0]:
+                self.record_combo_match(combo.id, item.image_path)
+                return candidate, result
+            if result[1] >= best[1]:
+                selected, best = candidate, result
+        return selected, best
+
     def position_frame(self, combo: Combo, stop_event=None, *, scan_region=None):
         """用完整觸發圖片定位，再將框選區域換算為箭頭追蹤區塊。"""
         self._match_state.position_confidence = 0.0
+        self._match_state.position_combo = None
+        self.record_combo_match(combo.id, None)
         settings = combo.position_control
         if settings.region_space == "screen":
             if scan_region is not None:
@@ -477,9 +533,11 @@ class ScreenCapture:
         frame = self.grab_frame(scan_region, color=True)
         if frame is None:
             return None, None
-        found, confidence, center = self.match_template(
-            cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), combo.image_path,
-            combo.match_threshold, scale_limit=1, stop_event=stop_event)
+        combo, (found, confidence, center) = self.match_combo_template(
+            combo, cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY),
+            scale_limit=1, stop_event=stop_event)
+        self._match_state.position_combo = combo
+        region = combo.position_control.region
         self._match_state.position_confidence = confidence
         if not found:
             return None, None
@@ -519,8 +577,7 @@ class ScreenCapture:
 
         match_frame = (cv2.cvtColor(frame[:, :, :3], cv2.COLOR_RGB2GRAY)
                        if frame.ndim == 3 else frame)
-        found, score, pos = self.match_template(
-            match_frame, combo.image_path, combo.match_threshold, region)
+        combo, (found, score, pos) = self.match_combo_template(combo, match_frame, region)
         self._match_state.balance_debug = (found, score, None, None)
         if not found or pos is None:
             return None, tr("找不到定位圖片"), 0.0, None

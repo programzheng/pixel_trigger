@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 
@@ -217,6 +217,46 @@ class PositionControl:
         return settings
 
 
+@dataclass
+class TriggerImage:
+    image_path: str = ""
+    region: tuple[int, int, int, int] | None = None
+    color: tuple[int, int, int] = (255, 185, 50)
+    band_color: tuple[int, int, int] = (115, 170, 75)
+    ignore_polygon: tuple[tuple[float, float], ...] = ()
+    include_polygon: tuple[tuple[float, float], ...] = ()
+    calc_region: tuple[int, int, int, int] | None = None
+
+    @classmethod
+    def from_combo(cls, combo: Combo) -> TriggerImage:
+        p = combo.position_control
+        return cls(combo.image_path, p.region, p.color, p.band_color,
+                   p.ignore_polygon, p.include_polygon, combo.calc_region)
+
+    def position_settings(self, shared: PositionControl) -> PositionControl:
+        return replace(shared, region=self.region, color=self.color,
+                       band_color=self.band_color, ignore_polygon=self.ignore_polygon,
+                       include_polygon=self.include_polygon)
+
+    def to_dict(self) -> dict:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TriggerImage:
+        if not isinstance(data, dict) or not isinstance(data.get("image_path"), str):
+            raise ValueError("Invalid trigger image")
+        region = data.get("region")
+        calc_region = data.get("calc_region")
+        for value in (region, calc_region):
+            if value is not None and (not isinstance(value, (list, tuple)) or len(value) != 4
+                                      or any(type(v) is not int for v in value)):
+                raise ValueError("Invalid trigger image region")
+        settings = PositionControl.from_dict(data)
+        return cls(data["image_path"], tuple(region) if region is not None else None,
+                   settings.color, settings.band_color, settings.ignore_polygon,
+                   settings.include_polygon, tuple(calc_region) if calc_region is not None else None)
+
+
 # ── Combo ─────────────────────────────────────────────────
 @dataclass
 class Combo:
@@ -246,6 +286,15 @@ class Combo:
     # 動作
     action: Action = field(default_factory=Action)
     position_control: PositionControl = field(default_factory=PositionControl)
+    trigger_images: list[TriggerImage] = field(default_factory=list)
+
+    def image_items(self) -> list[TriggerImage]:
+        return self.trigger_images or ([TriggerImage.from_combo(self)] if self.image_path else [])
+
+    def for_image(self, item: TriggerImage) -> Combo:
+        return replace(self, image_path=item.image_path, trigger_images=[],
+                       position_control=item.position_settings(self.position_control),
+                       calc_region=item.calc_region)
 
     def to_dict(self) -> dict:
         d = {
@@ -271,10 +320,24 @@ class Combo:
             d["text_threshold"] = self.text_threshold
             d["text_match_mode"] = self.text_match_mode.value
             d["text_match_ratio"] = self.text_match_ratio
+        items = self.image_items()
+        if items:
+            d["trigger_images"] = [item.to_dict() for item in items]
+            d["image_path"] = items[0].image_path
+            if self.detection_mode == "background":
+                d["calc_region"] = items[0].calc_region
+            if self.trigger.tracks_marker and self.position_control.region_space == "template":
+                d["position_control"] = items[0].position_settings(self.position_control).to_dict()
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> Combo:
+        items = d.get("trigger_images", [])
+        if not isinstance(items, list):
+            raise ValueError("Invalid trigger images")
+        items = [TriggerImage.from_dict(item) for item in items]
+        if "trigger_images" in d:
+            d = {**d, "image_path": items[0].image_path if items else ""}
         return cls(
             id=d.get("id", uuid.uuid4().hex[:8]),
             name=d.get("name", "新組合"),
@@ -294,6 +357,7 @@ class Combo:
             trigger=TriggerMode(d.get("trigger", "on_appear")),
             action=Action.from_dict(d.get("action", {})),
             position_control=PositionControl.from_dict(d.get("position_control", {})),
+            trigger_images=items,
         )
 
 

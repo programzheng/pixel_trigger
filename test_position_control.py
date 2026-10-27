@@ -137,7 +137,8 @@ class PositionControlTest(unittest.TestCase):
                 PositionControl(region=(0, 0, 100, 40), press_at=press, release_at=release).validate()
         engine = HookEngine()
         engine.set_profile(Profile(combos=[self.combo, Combo(image_path="other.png")]))
-        with patch("automation.threading.Thread") as thread:
+        with patch("automation.threading.Thread") as thread, \
+                patch.object(engine._capture, "load_template", return_value=True):
             thread.return_value.is_alive.return_value = False
             engine.start()
             self.assertTrue(engine.running)
