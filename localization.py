@@ -4,6 +4,17 @@ LANGUAGES = ("zh-TW", "en")
 _language = "zh-TW"
 
 ENGLISH = {
+    "基準": "Baseline",
+    "重設": "Reset",
+    "金額": "Amount",
+    "金額（餘額）": "Amount (balance)",
+    "四欄獨立儲存；變動可正可負。總計依統計項目重新計算。": "Fields are saved independently; change may be positive or negative. Totals follow the selected metric.",
+    "手動紀錄的金額可留空。": "Amount may be blank for manual records.",
+    "金額必須是非負整數。": "Amount must be a non-negative integer.",
+    "請輸入有效時間、類型、整數變動與非負整數金額。": "Enter a valid timestamp, type, integer change, and non-negative integer amount.",
+    "紀錄欄位格式不正確。": "Invalid record fields.",
+    "紀錄已變更，請重新選取。": "The record has changed. Please select it again.",
+
     "模板定位": "Locate by image",
     "固定螢幕區域": "Fixed screen region",
     "共用控制參數": "Shared control settings",

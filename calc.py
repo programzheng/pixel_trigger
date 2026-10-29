@@ -1,6 +1,8 @@
 """Visible-screen balance tracking and CSV ledger."""
 
 import csv
+import base64
+import json
 import re
 import threading
 from copy import deepcopy
@@ -16,7 +18,61 @@ from window_target import capture_region, get_window_region
 LEGACY_FIELDS = ["timestamp", "profile_id", "profile_name", "combo_id", "combo_name",
           "record_type", "balance", "previous_balance", "delta", "ocr_text",
           "ocr_confidence"]
-FIELDS = ["timestamp", "day", *LEGACY_FIELDS[1:]]
+DAY_FIELDS = ["timestamp", "day", *LEGACY_FIELDS[1:]]
+FIELDS = [*DAY_FIELDS, "reference_timestamp", "reference_balance", "manual_override"]
+
+
+def recover_csv_edit(directory):
+    journal = directory / ".pending-edit.json"
+    if not journal.exists():
+        return
+    originals = json.loads(journal.read_text(encoding="utf-8"))
+    if not isinstance(originals, dict) or any(not re.fullmatch(r"[0-9]{8}\.csv", name) for name in originals):
+        raise ValueError("Invalid ledger recovery journal")
+    for name, content in originals.items():
+        path = directory / name
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            temp = directory / f".{name}.restore"
+            temp.write_bytes(base64.b64decode(content, validate=True))
+            temp.replace(path)
+    journal.unlink()
+
+
+def write_csv_dates(directory, fields, dates):
+    """Journal a multi-date edit so an interrupted move cannot lose a record."""
+    directory.mkdir(parents=True, exist_ok=True)
+    recover_csv_edit(directory)
+    originals = {}
+    pending = []
+    journal = directory / ".pending-edit.json"
+    try:
+        for day, rows in dates.items():
+            if not re.fullmatch(r"[0-9]{8}", day):
+                raise ValueError("Invalid ledger date")
+            path = directory / f"{day}.csv"
+            originals[path.name] = base64.b64encode(path.read_bytes()).decode("ascii") if path.exists() else None
+            temp = directory / f".{day}.csv.tmp"
+            pending.append((temp, path))
+            with temp.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
+        staged_journal = directory / ".pending-edit.tmp"
+        staged_journal.write_text(json.dumps(originals), encoding="utf-8")
+        staged_journal.replace(journal)
+        for temp, path in pending:
+            temp.replace(path)
+        journal.unlink()
+    except OSError:
+        # Keep the journal if recovery also fails; load retries before reading CSVs.
+        recover_csv_edit(directory)
+        raise
+    finally:
+        for temp, _ in pending:
+            temp.unlink(missing_ok=True)
+        (directory / ".pending-edit.tmp").unlink(missing_ok=True)
 
 
 def accounting_day(now, reset_time):
@@ -64,17 +120,22 @@ class Ledger:
         reset_times = ({(profile.id, combo.id): combo.daily_reset_time
                         for combo in profile.combos} if profile else {})
         with self.lock:
+            recover_csv_edit(self.directory)
             rows, last, daily_last, migrate = [], {}, {}, False
+            references = {}
             for path in sorted(self.directory.glob("*.csv")):
                 with path.open(encoding="utf-8-sig", newline="") as stream:
                     reader = csv.DictReader(stream)
-                    if reader.fieldnames not in (FIELDS, LEGACY_FIELDS):
+                    if reader.fieldnames not in (FIELDS, DAY_FIELDS, LEGACY_FIELDS):
                         raise ValueError(tr("CSV 欄位毀損：{name}").format(name=path.name))
                     legacy = reader.fieldnames == LEGACY_FIELDS
+                    old_format = reader.fieldnames != FIELDS
+                    migrate = migrate or old_format
                     for row in reader:
                         try:
                             stamp = datetime.strptime(row["timestamp"], "%Y%m%d%H%M%S")
-                            if len(row["timestamp"]) != 14 or stamp.strftime("%Y%m%d") != path.stem:
+                            if (stamp.strftime("%Y%m%d%H%M%S") != row["timestamp"]
+                                    or stamp.strftime("%Y%m%d") != path.stem):
                                 raise ValueError()
                             if legacy:
                                 reset_time = reset_times.get(
@@ -90,26 +151,48 @@ class Ledger:
                             delta = int(row["delta"])
                             confidence = float(row["ocr_confidence"])
                             key = (row["profile_id"], row["combo_id"])
+                            if old_format:
+                                reference = references.get(key)
+                                row.update(reference_timestamp=reference["timestamp"] if reference else "",
+                                           reference_balance=reference["balance"] if reference else "",
+                                           manual_override="0")
+                            if row["manual_override"] not in ("0", "1"):
+                                raise ValueError()
+                            if row["reference_timestamp"]:
+                                reference_time = datetime.strptime(row["reference_timestamp"], "%Y%m%d%H%M%S")
+                                if reference_time.strftime("%Y%m%d%H%M%S") != row["reference_timestamp"]:
+                                    raise ValueError()
+                                parse_balance(row["reference_balance"])
+                            elif row["reference_balance"]:
+                                raise ValueError()
                             daily_key = (*key, row["day"])
                             daily_previous = daily_last.get(daily_key)
                             if (None in row or any(v is None for v in row.values())
                                     or not all(key) or not 0 <= confidence <= 1
                                     or row["record_type"] not in ("baseline", "change", "reset")
-                                    or (row["record_type"] != "change" and delta != 0)
-                                    or (row["record_type"] == "change" and
-                                        daily_previous is not None and
-                                        (previous != daily_previous or delta != balance - previous))):
+                                    or (row["manual_override"] == "0" and (
+                                        (row["record_type"] != "change" and delta != 0)
+                                        or (row["record_type"] == "change" and previous is not None
+                                            and delta != balance - previous)))
+                                    or (old_format and row["record_type"] == "change"
+                                        and daily_previous is not None and previous != daily_previous)):
                                 raise ValueError()
-                            if row["record_type"] == "change" and daily_previous is None:
+                            if old_format and row["record_type"] == "change" and daily_previous is None:
                                 migrate = True
+                            if old_format:
+                                if row["record_type"] != "reset":
+                                    row["record_type"] = "baseline" if daily_previous is None else "change"
+                                row["previous_balance"] = str(daily_previous) if daily_previous is not None else ""
+                                row["delta"] = str(balance - daily_previous) if row["record_type"] == "change" else "0"
                         except (ValueError, TypeError, KeyError):
                             raise ValueError(tr("CSV 紀錄毀損：{name} 第 {line} 行").format(
                                 name=path.name, line=reader.line_num)) from None
                         rows.append(row)
+                        references[key] = row
                         last[key] = balance
                         daily_last[daily_key] = balance
             if migrate:
-                self._replace_rows(rows)
+                self._replace_rows(rows, recalculate=False)
             else:
                 self.rows, self.last, self.daily_last = rows, last, daily_last
 
@@ -124,10 +207,13 @@ class Ledger:
                 return None
             kind = "reset" if reset else "baseline" if previous is None else "change"
             delta = balance - previous if kind == "change" else 0
+            reference = max((r for r in reversed(self.rows) if (r["profile_id"], r["combo_id"]) == key),
+                            key=lambda r: r["timestamp"], default=None)
             row = dict(zip(FIELDS, [now.strftime("%Y%m%d%H%M%S"), day, profile.id,
                        profile.name, combo.id, combo.name, kind, str(balance),
                        str(previous) if previous is not None else "", str(delta), text,
-                       str(confidence)]))
+                       str(confidence), reference["timestamp"] if reference else "",
+                       reference["balance"] if reference else "", "0"]))
             self.directory.mkdir(parents=True, exist_ok=True)
             path = self.directory / f"{now:%Y%m%d}.csv"
             header = not path.exists() or path.stat().st_size == 0
@@ -165,13 +251,27 @@ class Ledger:
             self._replace_rows(rows)
             return old_balance
 
+    def edit_record(self, index, timestamp, kind, delta, balance, reset_time="00:00", expected=None):
+        if (type(timestamp) is not datetime or kind not in ("baseline", "change", "reset")
+                or type(delta) is not int or type(balance) is not int or balance < 0):
+            raise ValueError("紀錄欄位格式不正確。")
+        with self.lock:
+            if not 0 <= index < len(self.rows) or (expected is not None and self.rows[index] != expected):
+                raise ValueError("紀錄已變更，請重新選取。")
+            rows = deepcopy(self.rows)
+            rows[index].update(timestamp=timestamp.strftime("%Y%m%d%H%M%S"),
+                               day=accounting_day(timestamp, reset_time), record_type=kind,
+                               delta=str(delta), balance=str(balance), manual_override="1")
+            rows.sort(key=lambda row: row["timestamp"])
+            self._replace_rows(rows, recalculate=False)
+
     def add_record(self, profile, combo, timestamp, balance):
         if type(timestamp) is not datetime or type(balance) is not int or balance < 0:
             raise ValueError("時間或身上金額格式不正確。")
         row = dict(zip(FIELDS, [timestamp.strftime("%Y%m%d%H%M%S"),
                    accounting_day(timestamp, combo.daily_reset_time), profile.id,
                    profile.name, combo.id, combo.name, "change", str(balance), "", "0",
-                   f"manual:{balance}", "1.0"]))
+                   f"manual:{balance}", "1.0", "", "", "0"]))
         with self.lock:
             rows = deepcopy(self.rows)
             rows.append(row)
@@ -188,12 +288,22 @@ class Ledger:
             self._replace_rows(rows)
             return deleted
 
-    def _replace_rows(self, rows):
+    def _replace_rows(self, rows, recalculate=True):
         last, daily_last = {}, {}
+        references = {}
         for row in rows:
             key = (row["profile_id"], row["combo_id"])
             daily_key = (*key, row["day"])
             previous = daily_last.get(daily_key)
+            if recalculate:
+                reference = references.get(key)
+                row.update(reference_timestamp=reference["timestamp"] if reference else "",
+                           reference_balance=reference["balance"] if reference else "")
+            references[key] = row
+            row.setdefault("manual_override", "0")
+            if not recalculate or row["manual_override"] == "1":
+                last[key] = daily_last[daily_key] = int(row["balance"])
+                continue
             if previous is None and row["record_type"] == "change":
                 row["record_type"] = "baseline"
             elif previous is not None and row["record_type"] == "baseline":
@@ -210,25 +320,9 @@ class Ledger:
         by_date = {}
         for row in rows:
             by_date.setdefault(row["timestamp"][:8], []).append(row)
-        self.directory.mkdir(parents=True, exist_ok=True)
-        pending = []
-        try:
-            for date, dated_rows in by_date.items():
-                path = self.directory / f"{date}.csv"
-                temp = path.with_name(f".{path.name}.tmp")
-                with temp.open("w", encoding="utf-8-sig", newline="") as stream:
-                    writer = csv.DictWriter(stream, fieldnames=FIELDS)
-                    writer.writeheader()
-                    writer.writerows(dated_rows)
-                pending.append((temp, path))
-            for temp, path in pending:
-                temp.replace(path)
-            for path in self.directory.glob("*.csv"):
-                if path.stem not in by_date:
-                    path.unlink()
-        finally:
-            for temp, _path in pending:
-                temp.unlink(missing_ok=True)
+        for path in self.directory.glob("*.csv"):
+            by_date.setdefault(path.stem, [])
+        write_csv_dates(self.directory, FIELDS, by_date)
         self.rows, self.last, self.daily_last = rows, last, daily_last
 
 

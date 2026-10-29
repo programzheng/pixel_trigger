@@ -424,9 +424,12 @@ class CalcTests(unittest.TestCase):
                 self.assertEqual([row["balance"] for row in app.background.ledger.rows], ["100", "140"])
 
                 window.tree.selection_set("o:1")
-                with patch("statistics_ui.simpledialog.askinteger", return_value=130):
+                with patch("statistics_ui.RecordEditor") as editor:
+                    editor.return_value.result = dict(timestamp=later, kind="change", delta=30, balance=130)
                     window._edit_record()
                 self.assertEqual(app.background.ledger.rows[1]["balance"], "130")
+                self.assertEqual(app.background.ledger.rows[1]["delta"], "30")
+                self.assertIn("30", window.summary.cget("text"))
 
                 window.tree.selection_set("o:1")
                 with patch("statistics_ui.messagebox.askyesno", return_value=True):

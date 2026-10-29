@@ -146,3 +146,11 @@ Existing single-image profiles load automatically. New profiles retain first-ima
 ![Multiple trigger images](docs/multi-trigger.png)
 
 ![Shared settings and per-image editor](docs/multi-trigger-settings.png)
+
+## Editing statistic records
+
+Double-click a record or select **Edit record** to edit its timestamp, type, change, and amount (balance) in one dialog. The four fields are saved independently; editing one record leaves other records unchanged. Change accepts signed integers, while amount must be non-negative and may be blank for manual records.
+
+Saving refreshes the totals: income, expense, and net use the change values; latest balance uses the amount of the latest record by timestamp. Moving a record across dates selects its new accounting day. Editing remains available during background OCR; a record changed while the dialog was open must be selected again to prevent updating the wrong entry.
+
+Existing CSV files can be loaded and upgraded, but older application versions cannot read the new fields and calculation references. Cross-date writes are journaled: failed writes roll back, and loading recovers an interrupted edit before reading records. Adding or deleting OCR records retains the existing automatic recalculation behavior.

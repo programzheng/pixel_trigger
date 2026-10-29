@@ -6,6 +6,7 @@ from datetime import datetime
 from tkinter import messagebox, simpledialog
 
 import ttkbootstrap as ttk
+from ttkbootstrap.publisher import Publisher
 
 import profile_manager
 from localization import tr
@@ -15,6 +16,7 @@ from stat_tracking import ManualLedger, accounting_day, crossing_level, period_k
 
 METRICS = {"income": "收入", "expense": "支出", "net": "淨額", "count": "紀錄次數", "balance": "最新餘額"}
 PERIODS = {"day": "日", "week": "週", "month": "月", "year": "年"}
+RECORD_KINDS = {"income": "收入", "expense": "支出", "baseline": "基準", "change": "變動", "reset": "重設"}
 
 
 class StatisticEditor:
@@ -97,6 +99,63 @@ class StatisticEditor:
         self.win.destroy()
 
 
+class RecordEditor:
+    def __init__(self, parent, row, source):
+        self.result = None
+        self.source = source
+        self.kinds = ("income", "expense") if source == "manual" else ("baseline", "change", "reset")
+        self.win = tk.Toplevel(parent)
+        self.win.title(tr("編輯紀錄"))
+        self.win.transient(parent)
+        self.win.grab_set()
+        self.win.resizable(False, False)
+        body = ttk.Frame(self.win, padding=16)
+        body.pack(fill="both", expand=True)
+        self.timestamp = tk.StringVar(value=row["timestamp"])
+        self.kind = tk.StringVar(value=tr(RECORD_KINDS[row["kind"]]))
+        self.delta = tk.StringVar(value=str(row["delta"]))
+        self.balance = tk.StringVar(value=str(row["balance"]))
+        for index, (label, variable) in enumerate((("時間 YYYYMMDDHHMMSS：", self.timestamp),
+                                                  ("類型", self.kind), ("變動", self.delta),
+                                                  ("金額（餘額）", self.balance))):
+            ttk.Label(body, text=tr(label)).grid(row=index, column=0, sticky="w", padx=(0, 10), pady=6)
+            widget = (ttk.Combobox(body, state="readonly", textvariable=variable,
+                                  values=[tr(RECORD_KINDS[kind]) for kind in self.kinds], width=25)
+                      if variable is self.kind else ttk.Entry(body, textvariable=variable, width=28))
+            widget.grid(row=index, column=1, sticky="ew", pady=6)
+            if variable is self.kind:
+                # ttkbootstrap retains a theme callback after destroying a combobox.
+                widget.bind("<Destroy>", lambda event: Publisher.unsubscribe(str(event.widget)), add="+")
+        ttk.Label(body, text=tr("四欄獨立儲存；變動可正可負。總計依統計項目重新計算。"),
+                  wraplength=420, justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=8)
+        if source == "manual":
+            ttk.Label(body, text=tr("手動紀錄的金額可留空。")).grid(row=5, column=0, columnspan=2, sticky="w")
+        buttons = ttk.Frame(body)
+        buttons.grid(row=6, column=0, columnspan=2, pady=(12, 0))
+        ttk.Button(buttons, text=tr("儲存"), command=self._save).pack(side="left", padx=6)
+        ttk.Button(buttons, text=tr("取消"), command=self.win.destroy).pack(side="left", padx=6)
+        self.win.bind("<Return>", lambda _event: self._save())
+        self.win.bind("<Escape>", lambda _event: self.win.destroy())
+        self.win.wait_window()
+
+    def _save(self):
+        try:
+            stamp = self.timestamp.get().strip()
+            when = datetime.strptime(stamp, "%Y%m%d%H%M%S")
+            if when.strftime("%Y%m%d%H%M%S") != stamp:
+                raise ValueError(tr("請輸入 YYYYMMDDHHMMSS。"))
+            kind = next(kind for kind in self.kinds if tr(RECORD_KINDS[kind]) == self.kind.get())
+            delta = int(self.delta.get())
+            balance = int(self.balance.get()) if self.balance.get().strip() else None
+            if (balance is None and self.source == "ocr") or (balance is not None and balance < 0):
+                raise ValueError(tr("金額必須是非負整數。"))
+        except (ValueError, StopIteration):
+            messagebox.showerror(tr("編輯紀錄失敗"), tr("請輸入有效時間、類型、整數變動與非負整數金額。"), parent=self.win)
+            return
+        self.result = dict(timestamp=when, kind=kind, delta=delta, balance=balance)
+        self.win.destroy()
+
+
 class StatisticsWindow:
     def __init__(self, app):
         self.app = app
@@ -137,7 +196,7 @@ class StatisticsWindow:
         records.pack(fill="both", expand=True, padx=8, pady=8)
         self.tree = ttk.Treeview(records, columns=("timestamp", "kind", "amount", "balance"), show="headings")
         for column, label in (("timestamp", tr("時間")), ("kind", tr("類型")),
-                              ("amount", tr("變動")), ("balance", tr("餘額"))):
+                              ("amount", tr("變動")), ("balance", tr("金額"))):
             self.tree.heading(column, text=label)
             self.tree.column(column, width=170)
         scrollbar = ttk.Scrollbar(records, command=self.tree.yview)
@@ -280,12 +339,17 @@ class StatisticsWindow:
         self.reset_button.config(state="normal" if stat.source == "ocr" and stat.enabled and not stat.archived
                                  and combo and busy
                                  and combo.enabled and combo.id in self.app.background.active_ids else "disabled")
-        key = (stat.id, self.date.get(), tuple((row["id"], row["timestamp"], row["delta"], row["balance"]) for row in rows))
+        key = (stat.id, self.date.get(), tuple((row["id"], row["timestamp"], row["kind"], row["delta"], row["balance"]) for row in rows))
         if force or key != self._view_key:
             self.tree.delete(*self.tree.get_children())
+            self._display_records = {}
+            self._ocr_records = {}
             for row in rows:
                 iid = ("m:" if stat.source == "manual" else "o:") + row["id"]
-                self.tree.insert("", "end", iid=iid, values=(row["timestamp"], row["kind"],
+                self._display_records[iid] = dict(row)
+                if stat.source == "ocr":
+                    self._ocr_records[iid] = dict(ocr[int(row["id"])])
+                self.tree.insert("", "end", iid=iid, values=(row["timestamp"], tr(RECORD_KINDS[row["kind"]]),
                                                          f"{int(row['delta']):+d}", row["balance"]))
             self._view_key = key
 
@@ -362,24 +426,24 @@ class StatisticsWindow:
             messagebox.showinfo(tr("編輯紀錄"), tr("請先選取一筆紀錄。"), parent=self.win)
             return
         record_id = selected[0][2:]
+        row = dict(self._display_records[selected[0]])
+        expected = self._ocr_records.get(selected[0])
+        values = RecordEditor(self.win, row, stat.source).result
+        if values is None:
+            return
+        if values == dict(timestamp=datetime.strptime(row["timestamp"], "%Y%m%d%H%M%S"),
+                          kind=row["kind"], delta=int(row["delta"]),
+                          balance=int(row["balance"]) if row["balance"] != "" else None):
+            return
         try:
             if stat.source == "manual":
-                income = messagebox.askyesnocancel(tr("紀錄類型"), tr("改為收入嗎？選「否」代表支出。"), parent=self.win)
-                if income is None:
-                    return
-                amount = simpledialog.askinteger(tr("編輯紀錄"), tr("金額："), minvalue=1,
-                                                 initialvalue=abs(int(self.tree.set(selected[0], "amount"))),
-                                                 parent=self.win)
-                if amount is None:
-                    return
-                self.manual.edit(record_id, "income" if income else "expense", amount)
+                self.manual.edit_record(record_id, **values)
             else:
-                amount = simpledialog.askinteger(tr("編輯 OCR 紀錄"), tr("當時餘額："), minvalue=0,
-                                                 initialvalue=int(self.tree.set(selected[0], "balance")),
-                                                 parent=self.win)
-                if amount is None:
-                    return
-                self.app.background.ledger.edit_balance(int(record_id), amount)
+                combo = self._source_combo(stat)
+                self.app.background.ledger.edit_record(
+                    int(record_id), **values, expected=expected,
+                    reset_time=combo.daily_reset_time if combo else stat.reset_time)
+            self.date.set(accounting_day(values["timestamp"], stat.reset_time))
         except (OSError, ValueError) as error:
             messagebox.showerror(tr("編輯紀錄失敗"), tr(str(error)), parent=self.win)
         self.refresh(force=True)
