@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -19,10 +20,48 @@ from gui import (
 )
 from localization import get_language, set_language, tr
 from statistics_ui import StatisticEditor, StatisticsWindow
-from models import Action, ActionType, Combo, PositionControl, Profile, TriggerMode
+from models import Action, ActionType, Combo, PositionControl, Profile, Statistic, TriggerMode
 
 
 class ComboScaleDisplayTest(unittest.TestCase):
+    def test_statistics_warning_border_tracks_displayed_value_and_settings(self):
+        root = ttk.Window()
+        root.withdraw()
+        stat = Statistic(limit=100, warning_ratio=0.8)
+        app = SimpleNamespace(root=root, profile=Profile(statistics=[stat]),
+                              background=SimpleNamespace(running=False,
+                                  ledger=SimpleNamespace(lock=threading.Lock(), rows=[])))
+        try:
+            with patch("statistics_ui.ManualLedger.load"), \
+                    patch("statistics_ui.statistic_value", return_value=79) as value:
+                window = StatisticsWindow(app)
+                for amount, enabled, archived, limit, expected in (
+                        (79, True, False, 100, 0), (80, True, False, 100, 4),
+                        (100, True, False, 100, 4), (120, True, False, 100, 4),
+                        (79, True, False, 100, 0), (80, False, False, 100, 0),
+                        (80, True, True, 100, 0), (80, True, False, None, 0),
+                        (None, True, False, 100, 0), (80, True, False, 100, 4)):
+                    with self.subTest(amount=amount, enabled=enabled, archived=archived, limit=limit):
+                        value.return_value = amount
+                        stat.enabled, stat.archived, stat.limit = enabled, archived, limit
+                        window.refresh(force=True)
+                        self.assertEqual(int(window.win.cget("highlightthickness")), expected)
+                self.assertEqual(window.win.cget("highlightbackground"), "#ff9800")
+                self.assertEqual(window.win.cget("highlightcolor"), "#ff9800")
+                date = window.date.get()
+                window.date.set("invalid")
+                window.refresh()
+                self.assertEqual(int(window.win.cget("highlightthickness")), 0)
+                window.date.set(date)
+                window.refresh()
+                self.assertEqual(int(window.win.cget("highlightthickness")), 4)
+                app.profile.statistics.clear()
+                window.refresh()
+                self.assertEqual(int(window.win.cget("highlightthickness")), 0)
+                window.win.destroy()
+        finally:
+            root.destroy()
+
     def test_app_title_uses_project_version(self):
         with patch("gui.tomllib.load", return_value={"project": {"version": "1.2.3"}}):
             self.assertEqual(_app_title(), "PixelTrigger v1.2.3")

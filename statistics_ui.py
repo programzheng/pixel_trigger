@@ -164,6 +164,7 @@ class StatisticsWindow:
         self.win = tk.Toplevel(app.root)
         self.win.title(tr("統計"))
         self.win.geometry("880x570")
+        self.win.configure(highlightbackground="#ff9800", highlightcolor="#ff9800")
         self.win.protocol("WM_DELETE_WINDOW", self.win.destroy)
         row = ttk.Frame(self.win, padding=8)
         row.pack(fill="x")
@@ -291,6 +292,8 @@ class StatisticsWindow:
         busy = self.app.background.running
         self.add_stat_button.config(state="disabled" if busy else "normal")
         if stat is None:
+            self.win.configure(highlightthickness=0)
+            self._refresh_signature = None
             self.summary.config(text=tr("尚未建立統計。") + (tr("請先停止背景偵測，再新增統計。") if busy
                                                      else tr("請按「新增統計」。")))
             self.tree.delete(*self.tree.get_children())
@@ -303,6 +306,8 @@ class StatisticsWindow:
             if date.strftime("%Y%m%d") != self.date.get():
                 raise ValueError()
         except ValueError:
+            self.win.configure(highlightthickness=0)
+            self._refresh_signature = None
             self.summary.config(text=tr("請輸入有效日期 YYYYMMDD。"))
             self.tree.delete(*self.tree.get_children())
             return
@@ -319,6 +324,9 @@ class StatisticsWindow:
             ocr = list(self.app.background.ledger.rows)
         rows = statistic_rows(stat, self.app.profile.id, ocr, self.manual.rows, self.date.get())
         value = statistic_value(stat, rows)
+        near_limit = (stat.enabled and not stat.archived and stat.limit is not None
+                      and value is not None and value >= stat.limit * stat.warning_ratio)
+        self.win.configure(highlightthickness=4 if near_limit else 0)
         state = (tr("已封存") if stat.archived else tr("已停用") if not stat.enabled else
                  tr("已達上限") if stat.limit is not None and value is not None and value >= stat.limit else
                  tr("接近上限") if stat.limit is not None and value is not None
