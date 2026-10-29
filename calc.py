@@ -237,20 +237,6 @@ class Ledger:
         expense = sum(max(0, -int(r["delta"])) for r in rows)
         return income, expense, income - expense, rows
 
-    def edit_balance(self, index, balance):
-        if type(balance) is not int or balance < 0:
-            raise ValueError("身上金額必須是非負整數。")
-        with self.lock:
-            if not 0 <= index < len(self.rows):
-                raise ValueError("找不到要編輯的紀錄。")
-            rows = deepcopy(self.rows)
-            old_balance = int(rows[index]["balance"])
-            rows[index]["balance"] = str(balance)
-            rows[index]["ocr_text"] = f"manual:{balance}"
-            rows[index]["ocr_confidence"] = "1.0"
-            self._replace_rows(rows)
-            return old_balance
-
     def edit_record(self, index, timestamp, kind, delta, balance, reset_time="00:00", expected=None):
         if (type(timestamp) is not datetime or kind not in ("baseline", "change", "reset")
                 or type(delta) is not int or type(balance) is not int or balance < 0):

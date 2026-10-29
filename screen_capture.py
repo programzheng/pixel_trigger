@@ -705,26 +705,6 @@ class ScreenCapture:
 # ── 獨立 OCR 工具函式（GUI 等外部模組使用）─────────────────
 
 
-def ocr_read_image(path: str) -> str:
-    """讀取圖片檔中的所有文字，回傳合併字串。首次呼叫需數秒載入模型。
-    若 Tesseract 不可用則回傳空字串。
-    """
-    try:
-        buf = np.fromfile(path, dtype=np.uint8)
-        img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-        if img is None:
-            return ""
-        capture = ScreenCapture()
-        with capture._ocr_lock:
-            words = _run_tesseract(
-                img, capture._tesseract_path, capture._tessdata_dir,
-                psm=6, languages="chi_tra+eng",
-            )
-        return "".join(text for text, _confidence in words)
-    except Exception:
-        return ""
-
-
 def ocr_from_screen(image_path: str, threshold: float = 0.8) -> str:
     """在螢幕上找到模板位置，對該 ROI 做 OCR，回傳偵測文字。
     與 runtime 使用相同管道，確保 verify_text 和執行期結果一致。

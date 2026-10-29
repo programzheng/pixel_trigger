@@ -26,7 +26,7 @@ with (PROJECT_DIR / "pyproject.toml").open("rb") as project_file:
 NUITKA_REPORT = PROJECT_DIR / "dist" / "nuitka-report.xml"
 FORBIDDEN_MODULES = ("mouseinfo", "easyocr", "bidi", "torch", "torchvision")
 NOTICE_DISTRIBUTIONS = (
-    "opencv-python", "pyautogui", "mss", "keyboard", "numpy", "pillow",
+    "opencv-python", "pyautogui", "keyboard", "numpy", "pillow",
     "ttkbootstrap", "pymsgbox", "pytweening", "pyscreeze", "pygetwindow",
     "pyrect", "pyperclip", "nuitka", "pyinstaller", "pyinstaller-hooks-contrib",
 )

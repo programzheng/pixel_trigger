@@ -105,20 +105,20 @@ class CalcTests(unittest.TestCase):
             self.assertEqual([row["record_type"] for row in reloaded.rows],
                              ["baseline", "baseline", "change", "baseline"])
 
-    def test_edit_balance_recalculates_following_deltas_and_csv(self):
+    def test_edit_record_preserves_following_deltas_and_csv(self):
         with tempfile.TemporaryDirectory() as folder:
             ledger = Ledger(folder)
             profile, combo = Profile(), Combo()
             now = datetime(2026, 9, 18, 9)
             for balance in (100, 150, 120):
                 ledger.record(profile, combo, balance, str(balance), .9, now)
-            ledger.edit_balance(1, 130)
-            self.assertEqual([int(row["delta"]) for row in ledger.rows], [0, 30, -10])
-            self.assertEqual(ledger.snapshot(profile.id, combo.id, "")[:3], (30, 10, 20))
+            ledger.edit_record(1, now, "change", 50, 130)
+            self.assertEqual([int(row["delta"]) for row in ledger.rows], [0, 50, -30])
+            self.assertEqual(ledger.snapshot(profile.id, combo.id, "")[:3], (50, 30, 20))
             reloaded = Ledger(folder)
             reloaded.load()
             self.assertEqual([(row["previous_balance"], row["delta"])
-                              for row in reloaded.rows], [("", "0"), ("100", "30"), ("130", "-10")])
+                              for row in reloaded.rows], [("", "0"), ("100", "50"), ("150", "-30")])
             self.assertEqual(reloaded.last[(profile.id, combo.id)], 120)
 
     def test_add_record_inserts_by_time_and_recalculates_following_delta(self):
@@ -554,7 +554,7 @@ class CalcTests(unittest.TestCase):
                 Image.new("RGB", (16, 24), "yellow").save(path)
                 with patch.object(tk.Toplevel, "wait_window"):
                     editor = ComboEditor(root, Combo(detection_mode="background"))
-                with patch("screen_capture.ocr_read_image") as ocr, \
+                with patch("screen_capture._run_tesseract") as ocr, \
                         patch("gui.filedialog.askopenfilenames", return_value=(str(path),)):
                     for mode in ("background", "active"):
                         editor.var_detection_mode.set(mode)

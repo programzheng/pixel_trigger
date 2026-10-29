@@ -11,7 +11,7 @@ This is a Windows-focused Python desktop automation app with a flat module layou
 - `uv run python prepare_tesseract.py` copies and verifies the approved OCR runtime needed for offline packaging.
 - `uv run python build.py` produces the Windows one-file build at `dist/pixel_trigger.exe`.
 
-Python 3.12 or newer is required; `.python-version` currently selects 3.13. Run the UI on Windows because global hotkeys, DPI handling, and input automation use Windows-specific behavior.
+Python 3.12 or newer is required; `.python-version` currently selects 3.12. Run the UI on Windows because global hotkeys, DPI handling, and input automation use Windows-specific behavior.
 
 ## Coding Style & Naming Conventions
 
@@ -19,7 +19,7 @@ Follow the existing PEP 8-style conventions: four-space indentation, `snake_case
 
 ## Testing Guidelines
 
-No automated test suite or coverage threshold currently exists. Before submitting, launch the app and manually verify profile load/save, hotkey start/stop, affected matching behavior, and action cancellation. For non-trivial pure logic, add a focused `test_*.py` using the standard library `unittest`, then run `uv run python -m unittest discover`.
+The automated test suite uses the standard library `unittest`; no coverage threshold is configured. Run `uv run python -m unittest discover`. Before submitting, launch the app and manually verify profile load/save, hotkey start/stop, affected matching behavior, and action cancellation. For non-trivial pure logic, add a focused `test_*.py` using `unittest`.
 
 ## Commit & Pull Request Guidelines
 

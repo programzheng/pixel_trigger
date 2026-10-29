@@ -8,7 +8,6 @@ import logging
 import sys
 from logging.handlers import TimedRotatingFileHandler
 import time
-import warnings
 import threading
 import tomllib
 import uuid
@@ -16,9 +15,8 @@ from copy import deepcopy
 from dataclasses import replace
 import keyboard
 import tkinter as tk
-from datetime import datetime, timedelta
+from datetime import datetime
 
-warnings.filterwarnings("ignore", message=".*pin_memory.*")
 from tkinter import filedialog, messagebox, simpledialog
 
 from pathlib import Path
